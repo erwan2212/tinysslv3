@@ -1,0 +1,2606 @@
+unit opensslutils;
+
+{$mode objfpc}{$H+}
+
+interface
+
+uses
+  Windows, Classes, SysUtils, utils, IniFiles, Math, DateUtils, Sockets,
+  // Unité principale de chargement
+  OpenSSLAPI,
+  // Unités de base et types
+  openssl_types,
+  openssl_stack,     // Pour OPENSSL_sk_new_null, OPENSSL_sk_push, OPENSSL_sk_num, OPENSSL_sk_pop_free...
+  openssl_objects,   // Contient OBJ_obj2nid, OBJ_nid2sn, etc.
+  // Cryptographie, clés et PKCS#7
+  openssl_evp,       // Pour EVP_PKEY_*, EVP_sha256...
+  openssl_rsa,
+  openssl_pkcs7,     // Pour pPKCS7, PKCS7_sign, PKCS7_free...
+  openssl_pkcs12,
+  openssl_x509,      // Pour X509_*, X509_NAME_*, pSTACK_OFX509...
+  openssl_x509v3,
+  // Formats et utilitaires
+  openssl_pem,       // Pour PEM_read_bio_*, PEM_write_bio_*
+  openssl_bio,       // Pour BIO_new_file, BIO_free...
+  openssl_bn,        // Pour BN_*, BN_CTX_*
+  openssl_asn1,      // Pour ASN1_INTEGER_*
+  openssl_obj_mac,   // Pour les constantes NID_*
+  openssl_crypto,
+  openssl_rand,
+  openssl_err;
+
+function LoadSSL: Boolean;
+procedure FreeSSL;
+//function generate_rsa_key:boolean;
+function generate_rsa_key_2:boolean;
+function mkcert(filename:string;cn:string;privatekey:string='';read_password:string='';serial:string='';ca:boolean=false):boolean;
+function mkreq(cn:string;keyfile,csrfile:string):boolean;
+function signreq(filename:string;cert:string;read_password:string='';alt:string='';ca:boolean=false):boolean;
+//function selfsign(filename:string;subject:string):boolean;
+
+function set_password(filename,password:string):boolean;
+
+function P7B2PEM(const FileName: string): Boolean;
+function PEM2P7B(const FileName: string): Boolean;
+
+function PFX2PEM(const FileName, ExportPwd: string): Boolean;
+function PEM2PFX(const ExportPwd, PrivateKeyFile, CertFile: string; const KeyPwd: string = ''): Boolean;
+
+function PVTDER2PEM(const FileName: string): Boolean;
+function PVTPEM2DER(filename:string):boolean;
+
+function X509DER2PEM(filename:string):boolean;
+function X509PEM2DER(filename:string):boolean;
+
+function print_cert(filename:string):boolean;
+function print_private(filename:string;password:string=''):boolean;
+function print_req(filename:string):boolean;
+
+function Encrypt_Pub(sometext:string;var encrypted:string):boolean;
+function Decrypt_Priv(ACryptedData:string):boolean;
+
+function hash(algo:string;input:array of byte):boolean;
+function crypt(algo,input:string;keystr:string='';ivstr:string='';enc:integer=1):boolean;
+function list_ciphers:boolean;
+function list_hashes:boolean;
+function Base64Encode(message:array of byte):boolean;
+function Base64Decode(message:string;utf16:boolean=false):boolean;
+
+function getDN(pDn: pX509_NAME): String;
+function getTime(asn1_time: pASN1_TIME): TDateTime;
+function getSerialNumber(x509:px509): String;
+
+function PrintSSHKey(filename:string):boolean;
+
+type PCharacter = PAnsiChar;
+type pSTACK_OFX509 = pointer;
+type TC_INT   = LongInt;
+
+implementation
+
+
+function LoadSSL: Boolean;
+begin
+  // Charge dynamiquement les bibliothèques OpenSSL et initialise les sous-systèmes
+  Result := GetIOpenSSL.Init;
+end;
+
+
+
+procedure FreeSSL;
+begin
+  {
+  EVP_cleanup;
+  ERR_free_strings;
+  }
+end;
+
+procedure bio_flush(bp:pbio);
+begin
+  Bio_ctrl(bp,BIO_CTRL_FLUSH,0,nil);
+end;
+
+procedure bio_reset(bp:pbio);
+begin
+  Bio_ctrl(bp,BIO_CTRL_reset,0,nil);
+end;
+
+function LoadPublicKey(const KeyFile: string): pEVP_PKEY;
+var
+  bio: pBIO;
+begin
+  Result := nil;
+  log('LoadPublicKey: ' + KeyFile);
+
+  // Ouverture du fichier en lecture seule ('r')
+  bio := BIO_new_file(PAnsiChar(AnsiString(KeyFile)), 'r');
+  if bio = nil then
+  begin
+    log('Erreur : impossible d''ouvrir le fichier ' + KeyFile);
+    Exit;
+  end;
+
+  try
+    log('PEM_read_bio_PUBKEY');
+    // Lecture de la clé publique au format PEM
+    Result := PEM_read_bio_PUBKEY(bio, nil, nil, nil);
+    if Result = nil then
+      log('Erreur lors du chargement de la clé publique');
+  finally
+    BIO_free(bio);
+  end;
+end;
+
+function PassphraseCallback(buf: PAnsiChar; size: Integer; rwflag: Integer; udata: Pointer): Integer; cdecl;
+var
+  pass: PAnsiChar;
+  len: Integer;
+begin
+  Result := 0;
+  if udata = nil then Exit;
+
+  pass := PAnsiChar(udata);
+  len := Length(pass);
+  if len > size then len := size;
+
+  Move(pass^, buf^, len);
+  Result := len;
+end;
+
+function LoadPrivateKey(KeyFile: string; password: string = ''): pEVP_PKEY;
+var
+  mem: pBIO;
+begin
+  Result := nil;
+  log('LoadPrivateKey: ' + KeyFile);
+
+  // Opening in read-only mode 'r' instead of 'r+'
+  mem := BIO_new_file(PChar(KeyFile), 'r');
+  if mem = nil then
+  begin
+    log('Erreur: impossible d''ouvrir le fichier ' + KeyFile);
+    Exit;
+  end;
+
+  try
+    log('PEM_read_bio_PrivateKey');
+    if password <> '' then
+    begin
+      // Custom callback to prevent any interactive prompt
+      Result := PEM_read_bio_PrivateKey(mem, nil, @PassphraseCallback, PAnsiChar(AnsiString(password)));
+    end
+    else
+    begin
+      // Passing a dummy callback returning 0 disables the interactive console prompt
+      Result := PEM_read_bio_PrivateKey(mem, nil, nil, nil);
+    end;
+
+    if Result = nil then
+      log('Erreur: echec de chargement de la cle privee (mot de passe incorrect ou format invalide)');
+  finally
+    BIO_free_all(mem);
+  end;
+end;
+
+// Wrapper conforme à la convention cdecl attendue par OpenSSL pour le callback de libération
+procedure FreeX509Callback(p: Pointer); cdecl;
+begin
+  if p <> nil then
+    X509_free(pX509(p));
+end;
+
+function PEM2P7B(const FileName: string): Boolean;
+var
+  bpIn, bpOut: pBIO;
+  certs: pSTACK_OFX509;
+  x509_cert: pX509;
+  p7: pPKCS7;
+  OutFileName: string;
+begin
+  Result := False;
+  p7 := nil;
+  certs := nil;
+
+  log('PEM2P7B: ' + FileName);
+
+  // 1. Ouverture du fichier source en lecture
+  bpIn := BIO_new_file(PAnsiChar(AnsiString(FileName)), 'r');
+  if bpIn = nil then
+  begin
+    log('Erreur : impossible d''ouvrir le fichier source.');
+    Exit;
+  end;
+
+  try
+    // 2. Initialisation de la pile de certificats
+    certs := openssl_sk_new_null();
+    if certs = nil then
+      Exit;
+
+    // 3. Lecture de tous les certificats PEM présents dans le fichier
+    repeat
+      x509_cert := PEM_read_bio_X509(bpIn, nil, nil, nil);
+      if x509_cert <> nil then
+        openssl_sk_push(certs, x509_cert);
+    until x509_cert = nil;
+
+  finally
+    BIO_free(bpIn);
+  end;
+
+  // Vérification si au moins un certificat a été lu
+  if openssl_sk_num(certs) <= 0 then
+  begin
+    log('Erreur : aucun certificat X509 valide trouvé dans le fichier.');
+    if certs <> nil then
+      openssl_sk_free(certs);
+    Exit;
+  end;
+
+  try
+    // 4. Création de la structure PKCS#7 "certs only"
+    p7 := PKCS7_sign(nil, nil, certs, nil, PKCS7_BINARY);
+    if p7 = nil then
+    begin
+      log('Erreur : échec de PKCS7_sign.');
+      Exit;
+    end;
+
+    // 5. Génération du fichier de sortie .p7b
+    OutFileName := ChangeFileExt(FileName, '.p7b');
+    bpOut := BIO_new_file(PAnsiChar(AnsiString(OutFileName)), 'w');
+    if bpOut <> nil then
+    begin
+      try
+        Result := PEM_write_bio_PKCS7(bpOut, p7) > 0;
+      finally
+        BIO_free(bpOut);
+      end;
+    end;
+
+  finally
+    if p7 <> nil then
+      PKCS7_free(p7);
+
+    // 6. Libération sécurisée de la pile et des éléments X509
+    if certs <> nil then
+      openssl_sk_pop_free(certs, @FreeX509Callback);
+  end;
+end;
+
+function P7B2PEM(const FileName: string): Boolean;
+var
+  bpIn, bpOut: pBIO;
+  p7: pPKCS7;
+  certs: pSTACK_OFX509;
+  certCount, i: Integer;
+  cert: pX509;
+  OutFileName: string;
+begin
+  Result := False;
+  p7 := nil;
+
+  log('P7B2PEM: ' + FileName);
+
+  // 1. Ouverture du fichier P7B en lecture
+  bpIn := BIO_new_file(PAnsiChar(AnsiString(FileName)), 'r');
+  if bpIn = nil then
+  begin
+    log('Erreur : impossible d''ouvrir le fichier ' + FileName);
+    Exit;
+  end;
+
+  try
+    // 2. Lecture du conteneur PKCS7 (essai au format PEM puis DER si échec)
+    p7 := PEM_read_bio_PKCS7(bpIn, nil, nil, nil);
+    if p7 = nil then
+    begin
+      // Réinitialisation du pointeur de fichier pour tenter une lecture DER (binaire)
+      BIO_reset(bpIn);
+      p7 := d2i_PKCS7_bio(bpIn, nil);
+    end;
+  finally
+    BIO_free(bpIn);
+  end;
+
+  if p7 = nil then
+  begin
+    log('Erreur : format PKCS7 invalide ou illisible.');
+    Exit;
+  end;
+
+  try
+    // 3. Extraction de la pile de certificats (uniquement si le type est NID_pkcs7_signed)
+    if (OBJ_obj2nid(p7^.type_) = NID_pkcs7_signed) and (p7^.d.sign <> nil) then
+      certs := p7^.d.sign^.cert
+    else
+      certs := nil;
+
+    if certs = nil then
+    begin
+      log('Erreur : aucun certificat trouvé dans la structure PKCS7.');
+      Exit;
+    end;
+
+    certCount := OPENSSL_sk_num(certs);
+    if certCount <= 0 then
+    begin
+      log('Erreur : la liste de certificats est vide.');
+      Exit;
+    end;
+
+    // 4. Écriture des certificats dans le fichier destination (.crt)
+    OutFileName := ChangeFileExt(FileName, '.crt');
+    bpOut := BIO_new_file(PAnsiChar(AnsiString(OutFileName)), 'w');
+    if bpOut = nil then
+    begin
+      log('Erreur : impossible de créer le fichier de sortie ' + OutFileName);
+      Exit;
+    end;
+
+    try
+      for i := 0 to certCount - 1 do
+      begin
+        cert := pX509(OPENSSL_sk_value(certs, i));
+        if cert <> nil then
+          PEM_write_bio_X509(bpOut, cert);
+      end;
+      Result := True;
+    finally
+      BIO_free(bpOut);
+    end;
+
+  finally
+    PKCS7_free(p7);
+  end;
+end;
+
+function PFX2PEM(const FileName, ExportPwd: string): Boolean;
+var
+  bpIn, bpOut: pBIO;
+  p12_cert: pPKCS12;
+  pkey: pEVP_PKEY;
+  x509_cert: pX509;
+  ca_certs: pSTACK_OFX509;
+  ParseRes: Integer;
+  CertFileName, KeyFileName: string;
+begin
+  Result := False;
+  p12_cert := nil;
+  pkey := nil;
+  x509_cert := nil;
+  ca_certs := nil;
+
+  log('PFX2PEM: ' + FileName);
+
+  // 1. Ouverture du fichier PFX / P12 en lecture binaire
+  bpIn := BIO_new_file(PAnsiChar(AnsiString(FileName)), 'rb');
+  if bpIn = nil then
+  begin
+    log('Erreur : impossible d''ouvrir le fichier ' + FileName);
+    Exit;
+  end;
+
+  try
+    // 2. Décodage DER du conteneur PKCS12
+    p12_cert := d2i_PKCS12_bio(bpIn, nil);
+  finally
+    BIO_free(bpIn);
+  end;
+
+  if p12_cert = nil then
+  begin
+    log('Erreur : format PKCS12 invalide.');
+    Exit;
+  end;
+
+  try
+    // 3. Extraction du certificat, de la clé et de la chaîne d'autorités (CA)
+    // PKCS12_parse renvoie 1 en cas de succès, 0 en cas d'échec
+    ParseRes := PKCS12_parse(p12_cert, PAnsiChar(AnsiString(ExportPwd)), @pkey, @x509_cert, @ca_certs);
+    if ParseRes <= 0 then
+    begin
+      log('Erreur : échec du décryptage PKCS12 (mot de passe incorrect ?)');
+      Exit;
+    end;
+
+    // 4. Écriture du certificat principal (.crt)
+    if x509_cert <> nil then
+    begin
+      CertFileName := ChangeFileExt(FileName, '.crt');
+      bpOut := BIO_new_file(PAnsiChar(AnsiString(CertFileName)), 'w');
+      if bpOut <> nil then
+      begin
+        try
+          log('PEM_write_bio_X509');
+          PEM_write_bio_X509(bpOut, x509_cert);
+        finally
+          BIO_free(bpOut);
+        end;
+      end;
+    end;
+
+    // 5. Écriture de la clé privée non chiffrée (.key)
+    if pkey <> nil then
+    begin
+      KeyFileName := ChangeFileExt(FileName, '.key');
+      bpOut := BIO_new_file(PAnsiChar(AnsiString(KeyFileName)), 'w');
+      if bpOut <> nil then
+      begin
+        try
+          log('PEM_write_bio_PrivateKey (sans mot de passe)');
+          PEM_write_bio_PrivateKey(bpOut, pkey, nil, nil, 0, nil, nil);
+        finally
+          BIO_free(bpOut);
+        end;
+      end;
+    end;
+
+    Result := True;
+
+  finally
+    // 6. Nettoyage de la mémoire OpenSSL
+    if x509_cert <> nil then
+      X509_free(x509_cert);
+    if pkey <> nil then
+      EVP_PKEY_free(pkey);
+    if ca_certs <> nil then
+      OPENSSL_sk_pop_free(ca_certs, @FreeX509Callback); // Libère la pile de certificats CA si présente
+    if p12_cert <> nil then
+      PKCS12_free(p12_cert);
+  end;
+end;
+
+function PEM2PFX(const ExportPwd, PrivateKeyFile, CertFile: string; const KeyPwd: string = ''): Boolean;
+var
+  bpIn, bpOut: pBIO;
+  pkey: pEVP_PKEY;
+  mainCert: pX509;
+  caCerts: pSTACK_OFX509;
+  p12_cert: pPKCS12;
+  tempCert: pX509;
+  OutFileName: string;
+  WriteRes: Integer;
+begin
+  Result := False;
+  pkey := nil;
+  mainCert := nil;
+  caCerts := nil;
+  p12_cert := nil;
+
+  log('PEM2PFX');
+  log('cert: ' + CertFile);
+  log('privatekey: ' + PrivateKeyFile);
+
+  // 1. Chargement de la clé privée PEM
+  bpIn := BIO_new_file(PAnsiChar(AnsiString(PrivateKeyFile)), 'r');
+  if bpIn = nil then
+  begin
+    log('Erreur : impossible d''ouvrir le fichier de clé privée.');
+    Exit;
+  end;
+
+  try
+    log('PEM_read_bio_PrivateKey');
+    if KeyPwd <> '' then
+      pkey := PEM_read_bio_PrivateKey(bpIn, nil, nil, PAnsiChar(AnsiString(KeyPwd)))
+    else
+      pkey := PEM_read_bio_PrivateKey(bpIn, nil, nil, nil);
+  finally
+    BIO_free(bpIn);
+  end;
+
+  if pkey = nil then
+  begin
+    log('Erreur : échec de lecture de la clé privée.');
+    Exit;
+  end;
+
+  // 2. Chargement des certificats PEM (Certificat principal + chaîne d'autorités s'il y en a)
+  bpIn := BIO_new_file(PAnsiChar(AnsiString(CertFile)), 'r');
+  if bpIn = nil then
+  begin
+    log('Erreur : impossible d''ouvrir le fichier de certificat.');
+    if pkey <> nil then EVP_PKEY_free(pkey);
+    Exit;
+  end;
+
+  try
+    log('PEM_read_bio_X509');
+    // Premier certificat trouvé = certificat principal
+    mainCert := PEM_read_bio_X509(bpIn, nil, nil, nil);
+    if mainCert = nil then
+    begin
+      log('Erreur : aucun certificat X509 valide n''a été trouvé.');
+      if pkey <> nil then EVP_PKEY_free(pkey);
+      Exit;
+    end;
+
+    // Chargement des certificats suivants dans la pile d'autorités (CA chain)
+    caCerts := OPENSSL_sk_new_null();
+    repeat
+      tempCert := PEM_read_bio_X509(bpIn, nil, nil, nil);
+      if tempCert <> nil then
+        OPENSSL_sk_push(caCerts, tempCert);
+    until tempCert = nil;
+
+  finally
+    BIO_free(bpIn);
+  end;
+
+  try
+    // 3. Création du conteneur PKCS12
+    log('PKCS12_create');
+    p12_cert := PKCS12_create(
+      PAnsiChar(AnsiString(ExportPwd)), // Mot de passe d'export
+      nil,                               // Libellé (friendly name)
+      pkey,                              // Clé privée
+      mainCert,                          // Certificat principal
+      caCerts,                           // Pile de certificats intermédiaires
+      0, 0, 0, 0, 0                      // Algorithmes / paramètres par défaut d'OpenSSL
+    );
+
+    if p12_cert = nil then
+    begin
+      log('Erreur : échec de PKCS12_create (mismatch entre clé et certificat ?)');
+      Exit;
+    end;
+
+    // 4. Écriture du fichier .pfx en binaire ('wb')
+    OutFileName := ChangeFileExt(CertFile, '.pfx');
+    bpOut := BIO_new_file(PAnsiChar(AnsiString(OutFileName)), 'wb');
+    if bpOut <> nil then
+    begin
+      try
+        log('i2d_PKCS12_bio');
+        WriteRes := i2d_PKCS12_bio(bpOut, p12_cert);
+        Result := (WriteRes > 0);
+      finally
+        BIO_free(bpOut);
+      end;
+    end;
+
+  finally
+    // 5. Nettoyage explicite des structures OpenSSL
+    if p12_cert <> nil then
+      PKCS12_free(p12_cert);
+    if mainCert <> nil then
+      X509_free(mainCert);
+    if pkey <> nil then
+      EVP_PKEY_free(pkey);
+    if caCerts <> nil then
+      OPENSSL_sk_pop_free(caCerts, @FreeX509Callback);
+  end;
+end;
+
+function X509PEM2DER(filename:string):boolean;
+var
+x509_cert:pX509=nil;
+bp:pBIO;
+begin
+result:=false;
+
+log('X509PEM2DER');
+log('filename:'+filename);
+
+  bp := BIO_new_file(pchar(filename), 'r+');
+  log('PEM_read_bio_X509');
+  x509_cert:=PEM_read_bio_X509(bp,nil,nil,nil);
+  BIO_free(bp);
+  if x509_cert=nil then
+     begin
+     writeln('PEM_read_bio_X509 failed');
+     exit;
+     end;
+
+  bp := BIO_new_file(pchar(GetCurrentDir+'\'+changefileext(filename,'.der')), 'wb'); //binary
+  result:= i2d_X509_bio (bp,x509_cert )<>-1;
+  if result=false then writeln('i2d_X509_bio failed');
+  BIO_free(bp);
+
+end;
+
+function X509DER2PEM(filename:string):boolean;
+var
+hfile_:thandle=thandle(-1);
+mem_:array[0..8192-1] of char;
+size_:dword=0;
+//
+pemX509Bio,bp:pBIO;
+X509Key:pX509=nil;
+begin
+  result:=false;
+  //
+  hfile_ := CreateFile(pchar(filename), GENERIC_READ , FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING , FILE_ATTRIBUTE_NORMAL, 0);
+  if hfile_=thandle(-1) then begin log('invalid handle',1);exit;end;
+  ReadFile (hfile_,mem_[0],sizeof(mem_),size_,nil);
+  closehandle(hfile_);
+  //
+  pemX509Bio := BIO_new(BIO_s_mem());
+  BIO_write(pemX509Bio, @mem_[0], size_);
+  Bio_flush(pemX509Bio);
+  X509Key := d2i_X509_bio (pemX509Bio, @X509Key);
+  if X509Key=nil then exit;
+  //
+  bp := BIO_new_file(pchar(GetCurrentDir+'\'+changefileext(filename,'.crt')), 'w+');
+  log('PEM_write_bio_X509');
+  PEM_write_bio_X509 (bp,X509Key);
+  BIO_free(bp);
+  //
+  result:=true;
+end;
+
+function PVTDER2PEM(const FileName: string): Boolean;
+var
+  bpIn, bpOut: pBIO;
+  privKey: pEVP_PKEY;
+  OutFileName: string;
+begin
+  Result := False;
+  privKey := nil;
+
+  log('PVTDER2PEM: ' + FileName);
+
+  // 1. Ouverture directe du fichier DER en lecture binaire ('rb')
+  bpIn := BIO_new_file(PAnsiChar(AnsiString(FileName)), 'rb');
+  if bpIn = nil then
+  begin
+    log('Erreur : impossible d''ouvrir le fichier ' + FileName);
+    Exit;
+  end;
+
+  try
+    // 2. Décodage DER vers la structure EVP_PKEY
+    privKey := d2i_PrivateKey_bio(bpIn, nil);
+  finally
+    BIO_free(bpIn);
+  end;
+
+  if privKey = nil then
+  begin
+    log('Erreur : échec de lecture de la clé privée DER (format invalide ?)');
+    Exit;
+  end;
+
+  try
+    // 3. Écriture de la clé privée au format PEM (sans mot de passe)
+    OutFileName := ChangeFileExt(FileName, '.key');
+    bpOut := BIO_new_file(PAnsiChar(AnsiString(OutFileName)), 'w');
+    if bpOut = nil then
+    begin
+      log('Erreur : impossible de créer le fichier de sortie ' + OutFileName);
+      Exit;
+    end;
+
+    try
+      log('PEM_write_bio_PrivateKey (sans mot de passe)');
+      Result := PEM_write_bio_PrivateKey(bpOut, privKey, nil, nil, 0, nil, nil) > 0;
+    finally
+      BIO_free(bpOut);
+    end;
+
+  finally
+    // 4. Libération de la clé privée
+    if privKey <> nil then
+      EVP_PKEY_free(privKey);
+  end;
+end;
+
+function PVTPEM2DER(filename:string):boolean;
+var
+p:pEVP_PKEY =nil;
+bp:pBIO;
+begin
+result:=false;
+
+log('PVTPEM2DER');
+log('filename:'+filename);
+
+p:=LoadPrivateKey(filename);
+  if p=nil then
+     begin
+     writeln('LoadPrivateKey failed');
+     exit;
+     end;
+
+  bp := BIO_new_file(pchar(GetCurrentDir+'\'+changefileext(filename,'.der')), 'w+');
+  result:= i2d_PrivateKey_bio  (bp,p )<>-1;
+  if result=false then writeln('i2d_X509_bio failed');
+  BIO_free(bp);
+
+end;
+
+function name_add_entry(const Section: string; Name: pX509_NAME; const IniPath: string = 'tinyssl.ini'): Boolean;
+var
+  Ini: TIniFile;
+  Keys: TStringList;
+  Key, Val: string;
+  i: Integer;
+  SuccessCount: Integer;
+begin
+  Result := False;
+  log('name_add_entry: ' + Section);
+
+  if (Name = nil) or not FileExists(IniPath) then
+  begin
+    log('Erreur : pointeur Name invalide ou fichier ' + IniPath + ' introuvable.');
+    Exit;
+  end;
+
+  Ini := TIniFile.Create(IniPath);
+  Keys := TStringList.Create;
+  try
+    try
+      Ini.ReadSection(Section, Keys);
+      SuccessCount := 0;
+
+      for i := 0 to Keys.Count - 1 do
+      begin
+        Key := Keys[i];
+        Val := Ini.ReadString(Section, Key, '');
+
+        if Val <> '' then
+        begin
+          log('X509_NAME_add_entry_by_txt: ' + Key + '=' + Val);
+
+          // MBSTRING_ASC permet la conversion automatique UTF-8 / ASCII par OpenSSL
+          {
+          if X509_NAME_add_entry_by_txt(
+      Name,
+      PAnsiChar(AnsiString(Key)),
+      MBSTRING_ASC,
+      PByte(PAnsiChar(AnsiString(Val))),
+      -1, -1, 0) = 1 then
+          }
+          if X509_NAME_add_entry_by_txt(
+                Name,
+                PAnsiChar(AnsiString(Key)),
+                MBSTRING_UTF8,
+                PByte(PAnsiChar(UTF8Encode(Val))),
+                -1, -1, 0) = 1 then
+          begin
+            Inc(SuccessCount);
+          end
+          else
+            log('Erreur OpenSSL sur la cle: ' + Key);
+        end;
+      end;
+
+      // On valide si au moins une entrée a été ajoutée avec succès
+      Result := (SuccessCount > 0);
+
+    except
+      on E: Exception do
+        log('Exception name_add_entry: ' + E.Message);
+    end;
+  finally
+    Keys.Free;
+    Ini.Free;
+  end;
+end;
+
+function ini_readstring(section,ident:string):string;
+var
+//
+ini:TIniFile;
+begin
+  //log('ini_readstring');
+  result:='';
+  if FileExists ('tinyssl.ini') then
+   begin
+   try
+   ini:=tinifile.Create ('tinyssl.ini');
+   result:=ini.ReadString (section,ident,'');
+   except
+   on e:exception do;
+   end;
+   end; //if FileExists ('tinyssl.ini') then
+end;
+
+function add_ext(cert: PX509; nid: Integer; const Value: string): Boolean;
+var
+  ex: PX509_EXTENSION;
+  ctx: TX509V3_CTX;
+  AnsiVal: AnsiString;
+begin
+  Result := False;
+  ex := nil;
+
+  log(Format('add_ext NID %d: %s', [nid, Value]));
+
+  if cert = nil then Exit;
+
+  // Initialisation du contexte X509V3
+  FillChar(ctx, SizeOf(TX509V3_CTX), 0);
+  X509V3_set_ctx(@ctx, cert, cert, nil, nil, 0);
+
+  // Stockage dans une variable locale pour garantir la durée de vie du PAnsiChar
+  AnsiVal := AnsiString(Value);
+
+  // Utilisation directe de la fonction NID pour s'affranchir de la conversion NID -> ShortName
+  ex := X509V3_EXT_nconf_nid(nil, @ctx, nid, PAnsiChar(AnsiVal));
+  if ex = nil then
+  begin
+    log(Format('Erreur : échec de création de l''extension pour le NID %d', [nid]));
+    Exit;
+  end;
+
+  try
+    if X509_add_ext(cert, ex, -1) = 1 then
+      Result := True
+    else
+      log(Format('Erreur : échec de l''ajout de l''extension au certificat (NID %d)', [nid]));
+  finally
+    X509_EXTENSION_free(ex);
+  end;
+end;
+
+// sign cert
+function do_X509_sign(cert:pX509; pkey:pEVP_PKEY;const md:pEVP_MD):integer;
+var
+rv:integer;
+mctx:PEVP_MD_CTX; //EVP_MD_CTX;
+pkctx:pEVP_PKEY_CTX = nil;
+begin
+        log('EVP_MD_CTX_init');
+	//EVP_MD_CTX_init(@mctx);
+        mctx := EVP_MD_CTX_create();
+        log('EVP_DigestSignInit');
+	rv := EVP_DigestSignInit(mctx, @pkctx, md, nil, pkey);
+        log('X509_sign_ctx');
+	if (rv > 0) then rv := X509_sign_ctx(cert, mctx);
+        log('EVP_MD_CTX_cleanup');
+	//EVP_MD_CTX_cleanup(mctx);
+        EVP_MD_CTX_destroy(mctx);
+	if rv > 0 then result:= 1 else result:= 0;
+end;
+
+{
+function BN_num_bytes(bits:integer):integer;
+begin
+  result:=ceil(bits / 8);
+  log('BN_num_bytes:'+inttostr(result));
+end;
+}
+
+//openssl x509 -noout -fingerprint -in ca.crt
+//openssl x509 -noout -pubkey -in ca.crt | openssl pkey -pubin -outform DER | openssl dgst -SHA1 -c
+function hash_pubkey(x509_cert: pX509): boolean;
+const
+  X509V3_ADD_DEFAULT = 0;
+var
+  ret: integer;
+  pkey: pEVP_PKEY;
+  digest: array[0..63] of byte;
+  size: cardinal;
+  subjectKeyIdentifier: pASN1_OCTET_STRING;
+begin
+  Result := False;
+  if x509_cert = nil then Exit;
+
+  pkey := X509_get_pubkey(x509_cert);
+  if pkey = nil then Exit;
+
+  try
+    size := 0;
+    ret := X509_pubkey_digest(x509_cert, EVP_sha1(), @digest[0], @size);
+
+    if ret = 1 then
+    begin
+      subjectKeyIdentifier := ASN1_OCTET_STRING_new;
+      if subjectKeyIdentifier <> nil then
+      begin
+        ASN1_OCTET_STRING_set(subjectKeyIdentifier, @digest[0], size);
+        log('X509_add1_ext_i2d');
+        X509_add1_ext_i2d(x509_cert, NID_subject_key_identifier, subjectKeyIdentifier, 0, X509V3_ADD_DEFAULT);
+        ASN1_OCTET_STRING_free(subjectKeyIdentifier);
+        Result := True;
+      end;
+    end;
+  finally
+    EVP_PKEY_free(pkey);
+  end;
+end;
+
+//the private key of the resulting cert is the request.key
+function signreq(filename: string; cert: string; read_password: string = ''; alt: string = ''; ca: boolean = false): boolean;
+var
+  ret: integer;
+  pkey: PEVP_PKEY = nil;
+  pktmp: PEVP_PKEY = nil;
+  x509_ca: pX509 = nil;
+  x509_cert: pX509 = nil;
+  X509_REQ: pX509_REQ = nil;
+  bp: pBIO = nil;
+  serial: integer = 1;
+  days: long = 365 * 24 * 3600; // 1 year
+  value: string;
+label free_all;
+begin
+  log('signreq');
+  log('filename:' + filename);
+  log('cert:' + cert);
+  result := false;
+
+  // 1. Load CA Certificate
+  bp := BIO_new_file(pchar(cert), 'r+');
+  if bp = nil then goto free_all;
+  log('PEM_read_bio_X509');
+  x509_ca := PEM_read_bio_X509(bp, nil, nil, nil);
+  BIO_free(bp);
+  bp := nil;
+  if x509_ca = nil then goto free_all;
+
+  // 2. Load CA Private Key
+  try
+    pkey := LoadPrivateKey(ChangeFileExt(cert, '.key'), read_password);
+  except
+    on e: Exception do
+    begin
+      log(e.message, 1);
+      pkey := nil;
+    end;
+  end;
+  // Test d'échec sorti du bloc try..except pour éviter le "Jump outside of an exception block"
+  if pkey = nil then goto free_all;
+
+  // 3. Load CSR (X509 REQ)
+  bp := BIO_new_file(pchar(filename), 'r+');
+  if bp = nil then goto free_all;
+  log('PEM_read_bio_X509_REQ');
+  X509_REQ := PEM_read_bio_X509_REQ(bp, nil, nil, nil);
+  BIO_free(bp);
+  bp := nil;
+  if X509_REQ = nil then goto free_all;
+
+  // 4. Create new X509 Cert
+  x509_cert := X509_new();
+  if x509_cert = nil then goto free_all;
+
+  // Set Version (v3 = 2)
+  log('X509_set_version');
+  X509_set_version(x509_cert, 2);
+
+  // Set Serial
+  log('X509_get_serialNumber');
+  ASN1_INTEGER_set(X509_get_serialNumber(x509_cert), serial);
+
+  // Set Issuer Name from CA
+  log('X509_set_issuer_name');
+  X509_set_issuer_name(x509_cert, X509_get_subject_name(x509_ca));
+
+  // Set Validity Dates
+  X509_gmtime_adj(X509_get_notBefore(x509_cert), 0);
+  X509_gmtime_adj(X509_get_notAfter(x509_cert), days);
+
+  // Set Subject Name from REQ
+  log('X509_set_subject_name');
+  X509_set_subject_name(x509_cert, X509_REQ_get_subject_name(X509_REQ));
+
+  // Set Public Key from REQ
+  pktmp := X509_REQ_get_pubkey(X509_REQ);
+  if pktmp = nil then goto free_all;
+  log('X509_set_pubkey');
+  ret := X509_set_pubkey(x509_cert, pktmp);
+  EVP_PKEY_free(pktmp);
+  if ret <> 1 then goto free_all;
+
+  // Extensions
+  if ca then add_ext(x509_cert, NID_basic_constraints, 'critical,CA:true');
+  if alt <> '' then add_ext(x509_cert, NID_subject_alt_name, pchar(alt));
+
+  value := ini_readstring('req_ext', 'key_usage');
+  if value <> '' then add_ext(x509_cert, NID_key_usage, pchar(value));
+
+  value := ini_readstring('req_ext', 'subject_key_identifier');
+  if value = 'hash' then hash_pubkey(x509_cert);
+
+  value := ini_readstring('req_ext', 'ext_key_usage');
+  if value <> '' then add_ext(x509_cert, NID_ext_key_usage, pchar(value));
+
+  // 5. SIGN THE CERTIFICATE (Signature SHA-256 valide)
+  log('X509_sign');
+  if X509_sign(x509_cert, pkey, EVP_sha256()) = 0 then
+  begin
+    log('Signature X509_sign failed', 1);
+    goto free_all;
+  end;
+
+  // 6. Save Certificate
+  bp := BIO_new_file(pchar(ChangeFileExt(filename, '.crt')), 'w+');
+  if bp <> nil then
+  begin
+    log('PEM_write_bio_X509');
+    ret := PEM_write_bio_X509(bp, x509_cert);
+    BIO_free(bp);
+    if ret = 1 then result := true;
+  end;
+
+free_all:
+  if x509_cert <> nil then X509_free(x509_cert);
+  if X509_REQ <> nil then X509_REQ_free(X509_REQ);
+  if x509_ca <> nil then X509_free(x509_ca);
+  if pkey <> nil then EVP_PKEY_free(pkey);
+end;
+
+
+{
+PEM Format
+Most CAs (Certificate Authority) provide certificates in PEM format in Base64 ASCII encoded files.
+The certificate file types can be .pem, .crt, .cer, or .key.
+The .pem file can include the server certificate, the intermediate certificate and the private key in a single file.
+The server certificate and intermediate certificate can also be in a separate .crt or .cer file.
+The private key can be in a .key file.
+
+PKCS#12 Format
+The PKCS#12 certificates are in binary form, contained in .pfx or .p12 files.
+The PKCS#12 can store the server certificate, the intermediate certificate and the private key in a single .pfx file with password protection.
+These certificates are mainly used on the Windows platform.
+}
+
+//openssl pkcs12 -inkey priv.key -in cert.crt -export -out cert.pfx
+//openssl pkcs12 -in INFILE.p12 -out OUTFILE.crt -nodes -> no encrypted private key
+//openssl pkcs12 -in INFILE.p12 -out OUTFILE.crt -> encrypted private key
+//openssl pkcs12 -in INFILE.p12 -out OUTFILE.key -nodes -nocerts -> private key only
+//openssl pkcs12 -in INFILE.p12 -out OUTFILE.crt -nokeys -> cert only
+{ ============================================================================
+  mkcert — version OpenSSL 3.0.x
+  Réécrite à partir de la version 1.1.1 pour utiliser les APIs non dépréciées
+  de libcrypto 3.0 (unités openssl_evp, openssl_rsa, openssl_core).
+
+  Changements principaux par rapport à la version 1.1.1 :
+    - Génération RSA : RSA_new / RSA_generate_key_ex / EVP_PKEY_assign
+        → EVP_PKEY_CTX_new_from_name + EVP_PKEY_keygen_init
+          + EVP_PKEY_CTX_set_rsa_keygen_bits + EVP_PKEY_generate
+    - Le type PRSA et BN_new/BN_set_word/BN_free pour l'exposant
+        disparaissent de ce chemin ; l'exposant par défaut (65537) est
+        sélectionné par OpenSSL 3.0 automatiquement.
+    - Chiffrement de la clé PEM : EVP_des_ede3_cbc() reste valide en
+        OpenSSL 3.0 (non dépréciée), mais on migre vers AES-256-CBC
+        (EVP_aes_256_cbc) qui est la recommandation actuelle.
+    - EVP_PKEY_CTX_free remplace la libération manuelle du ctx keygen.
+  ============================================================================ }
+
+function mkcert(filename: string; cn: string; privatekey: string = '';
+                read_password: string = ''; serial: string = '';
+                ca: boolean = false): boolean;
+var
+  pkey     : PEVP_PKEY     = nil;
+  x509     : pX509          = nil;
+  name     : pX509_NAME    = nil;
+  bp       : pBIO           = nil;
+  kctx     : PEVP_PKEY_CTX = nil;   { contexte de génération de clé }
+  ret      : integer;
+  days_in_seconds : Int64;
+  iserial  : integer = 1;
+  asn1     : pASN1_INTEGER = nil;
+  p        : pBIGNUM        = nil;
+  value    : string;
+  keyPath, certPath : string;
+begin
+  result := false;
+  log('mkcert (OpenSSL 3.0)');
+
+  { ---- Construction des chemins ------------------------------------------ }
+  certPath := filename;
+  if ExtractFilePath(certPath) = '' then
+    certPath := IncludeTrailingPathDelimiter(GetCurrentDir) + certPath;
+  keyPath := ChangeFileExt(certPath, '.key');
+
+  try
+    { =========================================================
+      1. Clé privée — Génération ou Chargement
+      ========================================================= }
+    if privatekey = '' then
+    begin
+      log('EVP_PKEY_generate RSA-2048 (OpenSSL 3.0)');
+
+      { Créer le contexte de génération par nom d'algorithme.
+        On passe nil pour libctx (contexte de bibliothèque par défaut)
+        et nil pour propquery (pas de contrainte de propriété). }
+      kctx := EVP_PKEY_CTX_new_from_name(nil, 'RSA', nil);
+      if kctx = nil then Exit;
+
+      try
+        { Initialiser l'opération keygen }
+        if EVP_PKEY_keygen_init(kctx) <> 1 then Exit;
+
+        { Paramétrer la taille de clé (2048 bits).
+          EVP_PKEY_CTX_set_rsa_keygen_bits est déclarée dans openssl_rsa. }
+        if EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) <= 0 then Exit;
+
+        { OpenSSL 3.0 utilise 65537 (F4) comme exposant public par défaut ;
+          aucun appel supplémentaire n'est nécessaire pour l'imposer.
+          Si vous deviez le changer, utilisez EVP_PKEY_CTX_set1_rsa_keygen_pubexp
+          (déclarée dans openssl_rsa) à la place de l'ancien set_rsa_keygen_pubexp
+          (déprécié). }
+
+        { Générer la clé ; EVP_PKEY_generate alloue *pkey. }
+        if EVP_PKEY_generate(kctx, @pkey) <> 1 then Exit;
+      finally
+        { Le contexte keygen est indépendant de pkey : on le libère ici. }
+        EVP_PKEY_CTX_free(kctx);
+        kctx := nil;
+      end;
+    end
+    else
+    begin
+      log('Reusing ' + privatekey);
+      pkey := LoadPrivateKey(privatekey, read_password);
+      if pkey = nil then Exit;
+    end;
+
+    { =========================================================
+      2. Création du certificat X.509 v3
+      ========================================================= }
+    x509 := X509_new();
+    if x509 = nil then Exit;
+
+    X509_set_version(x509, 2); { 2 = v3 }
+
+    { =========================================================
+        3. Numéro de série
+    ========================================================= }
+      if serial = '' then
+      begin
+        ASN1_INTEGER_set(X509_get_serialNumber(x509), iserial);
+      end
+      else
+      begin
+        { BN_hex2bn attend un PPBIGNUM : il alloue le BIGNUM lui-même
+          si *pp = nil. On déclare p : PBIGNUM = nil dans la section var. }
+        if BN_hex2bn(@p, PAnsiChar(AnsiString(serial))) = 0 then Exit;
+        try
+          asn1 := BN_to_ASN1_INTEGER(p, nil);
+          if asn1 = nil then Exit;
+          try
+            X509_set_serialNumber(x509, asn1);
+          finally
+            ASN1_INTEGER_free(asn1);
+            asn1 := nil;
+          end;
+        finally
+          BN_free(p);
+          p := nil;
+        end;
+      end;
+
+    { =========================================================
+      4. Durée de validité (5 ans)
+      ========================================================= }
+    days_in_seconds := Int64(5) * 365 * 24 * 3600;
+    X509_gmtime_adj(X509_get_notBefore(x509), 0);
+    X509_gmtime_adj(X509_get_notAfter(x509), days_in_seconds);
+
+    { =========================================================
+      5. Clé publique
+      ========================================================= }
+    X509_set_pubkey(x509, pkey);
+
+    { =========================================================
+      6. Subject & Issuer (certificat auto-signé)
+      ========================================================= }
+    name := X509_NAME_new();
+    if name = nil then Exit;
+    try
+      name_add_entry('cert', name);
+      X509_NAME_add_entry_by_txt(name, 'CN', MBSTRING_ASC,
+                                 PByte(PAnsiChar(AnsiString(cn))), -1, -1, 0);
+      X509_set_subject_name(x509, name);
+      X509_set_issuer_name(x509, name);
+    finally
+      { OpenSSL fait une copie interne : on libère le name local. }
+      X509_NAME_free(name);
+      name := nil;
+    end;
+
+    { =========================================================
+      7. Extensions X.509v3
+      ========================================================= }
+    if ca then
+      add_ext(x509, NID_basic_constraints, 'critical,CA:TRUE');
+
+    value := ini_readstring('cert_ext', 'key_usage');
+    if value = '' then value := 'digitalSignature';
+    add_ext(x509, NID_key_usage, PAnsiChar(AnsiString(value)));
+
+    value := ini_readstring('cert_ext', 'subject_key_identifier');
+    if value = 'hash' then hash_pubkey(x509);
+
+    value := ini_readstring('cert_ext', 'ext_key_usage');
+    if value <> '' then
+      add_ext(x509, NID_ext_key_usage, PAnsiChar(AnsiString(value)));
+
+    { =========================================================
+      8. Signature du certificat avec SHA-256
+      ========================================================= }
+    if X509_sign(x509, pkey, EVP_sha256()) = 0 then Exit;
+
+    { =========================================================
+      9. Écriture de la clé privée sur disque (uniquement si générée)
+         On passe d'EVP_des_ede3_cbc à EVP_aes_256_cbc, recommandé
+         en OpenSSL 3.0. Les deux fonctions sont disponibles dans
+         openssl_evp ; si vous préférez rester sur 3DES pour la
+         compatibilité, remplacez simplement EVP_aes_256_cbc()
+         par EVP_des_ede3_cbc().
+      ========================================================= }
+    if privatekey = '' then
+    begin
+      bp := BIO_new_file(PAnsiChar(AnsiString(keyPath)), 'w+');
+      if bp = nil then Exit;
+      try
+        ret := PEM_write_bio_PrivateKey(
+                 bp,
+                 pkey,
+                 EVP_aes_256_cbc(), { chiffrement AES-256-CBC }
+                 nil,               { pas de mot de passe inline }
+                 0,
+                 nil,               { callback de mot de passe (nil = prompt console) }
+                 nil);
+      finally
+        BIO_free(bp);
+        bp := nil;
+      end;
+      if ret <= 0 then Exit;
+    end;
+
+    { =========================================================
+      10. Écriture du certificat sur disque
+      ========================================================= }
+    bp := BIO_new_file(PAnsiChar(AnsiString(certPath)), 'w+');
+    if bp = nil then Exit;
+    try
+      ret := PEM_write_bio_X509(bp, x509);
+    finally
+      BIO_free(bp);
+      bp := nil;
+    end;
+    if ret <= 0 then Exit;
+
+    result := true;
+
+  finally
+    { ---- Nettoyage sécurisé ---------------------------------------------- }
+    { kctx est libéré dans son propre bloc try/finally ci-dessus ;
+      cette garde couvre les cas d'Exit prématuré avant ce bloc. }
+    if kctx  <> nil then EVP_PKEY_CTX_free(kctx);
+    if x509  <> nil then X509_free(x509);
+    if pkey  <> nil then EVP_PKEY_free(pkey);
+    { p et asn1 sont libérés dans leurs propres blocs ; guards de sécurité : }
+    if p     <> nil then BN_free(p);
+    if asn1  <> nil then ASN1_INTEGER_free(asn1);
+  end;
+end;
+
+//to sign a csr
+//openssl x509 -req -in device.csr -CA rootCA.pem -CAkey rootCA.key -CAcreateserial -out device.crt -days 500 -sha256
+function mkreq(cn: string; keyfile, csrfile: string): boolean;
+var
+  ret     : integer;
+  kctx    : PEVP_PKEY_CTX = nil;
+  bp      : pBIO           = nil;
+  req     : pX509_REQ      = nil;
+  key     : pEVP_PKEY      = nil;
+  name    : pX509_NAME     = nil;
+  basePath: string;
+begin
+  log('mkreq');
+  log('csrfile:'    + csrfile);
+  log('privatekey:' + keyfile);
+  log('cn:'         + cn);
+
+  result   := false;
+  basePath := IncludeTrailingPathDelimiter(GetCurrentDir);
+
+  // =========================================================
+  // 1. Obtention de la clé privée — génération ou chargement
+  // =========================================================
+  if keyfile = '' then
+  begin
+    log('Génération nouvelle clé RSA 2048 (OpenSSL 3.0)...');
+
+    // EVP_PKEY_CTX_new_from_name remplace RSA_new + BN_new + RSA_generate_key_ex
+    kctx := EVP_PKEY_CTX_new_from_name(nil, 'RSA', nil);
+    if kctx = nil then Exit;
+
+    try
+      if EVP_PKEY_keygen_init(kctx) <> 1 then Exit;
+      if EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) <= 0 then Exit;
+      // L'exposant 65537 est la valeur par défaut d'OpenSSL 3.0
+      if EVP_PKEY_generate(kctx, @key) <> 1 then Exit;
+    finally
+      EVP_PKEY_CTX_free(kctx);
+      kctx := nil;
+    end;
+  end
+  else
+  begin
+    log('Reusing ' + keyfile + '...', 1);
+    key := LoadPrivateKey(keyfile);
+    if key = nil then
+    begin
+      log('Erreur: Impossible de charger la clé ' + keyfile, 1);
+      Exit;
+    end;
+  end;
+
+  try
+    // =========================================================
+    // 2. Création de la requête X.509 (CSR)
+    // =========================================================
+    log('X509_REQ_new');
+    req := X509_REQ_new();
+    if req = nil then Exit;
+
+    X509_REQ_set_version(req, 0);   // version 1 (valeur 0 = PKCS#10 v1)
+    X509_REQ_set_pubkey(req, key);
+
+    log('X509_NAME_new');
+    name := X509_NAME_new();
+    if name = nil then Exit;
+    try
+      name_add_entry('req', name);
+
+      // PByte(PAnsiChar(...)) : le 4e paramètre est "const unsigned char*" en C,
+      // traduit en PByte dans les unités OpenSSL 3.0 — cast sans copie.
+      log('X509_NAME_add_entry_by_txt');
+      X509_NAME_add_entry_by_txt(name, 'CN', MBSTRING_ASC,
+                                 PByte(PAnsiChar(AnsiString(cn))), -1, -1, 0);
+
+      log('X509_REQ_set_subject_name');
+      X509_REQ_set_subject_name(req, name);
+    finally
+      X509_NAME_free(name);   // OpenSSL fait une copie interne
+      name := nil;
+    end;
+
+    // =========================================================
+    // 3. Signature de la requête avec SHA-256
+    // =========================================================
+    log('X509_REQ_sign');
+    if X509_REQ_sign(req, key, EVP_sha256()) = 0 then Exit;
+
+    // =========================================================
+    // 4. Sauvegarde de la clé privée (uniquement si générée)
+    //    On utilise AES-256-CBC ; remplacer par EVP_des_ede3_cbc()
+    //    si la compatibilité 1.1.1 est requise côté lecteur.
+    //    Passer nil en 3e paramètre pour écrire en clair (sans mot de passe).
+    // =========================================================
+    if keyfile = '' then
+    begin
+      bp := BIO_new_file(
+              PAnsiChar(AnsiString(basePath + ChangeFileExt(csrfile, '.key'))),
+              'w+');
+      if bp = nil then Exit;
+      try
+        log('PEM_write_bio_PrivateKey (no password)');
+        ret := PEM_write_bio_PrivateKey(bp, key, nil, nil, 0, nil, nil);
+      finally
+        BIO_free(bp);
+        bp := nil;
+      end;
+      if ret <= 0 then Exit;
+    end;
+
+    // =========================================================
+    // 5. Sauvegarde de la requête CSR
+    // =========================================================
+    bp := BIO_new_file(
+            PAnsiChar(AnsiString(basePath + csrfile)),
+            'w+');
+    if bp = nil then Exit;
+    try
+      log('PEM_write_bio_X509_REQ');
+      ret := PEM_write_bio_X509_REQ(bp, req);
+    finally
+      BIO_free(bp);
+      bp := nil;
+    end;
+    if ret <= 0 then Exit;
+
+    result := true;
+
+  finally
+    if req  <> nil then X509_REQ_free(req);
+    if key  <> nil then EVP_PKEY_free(key);
+    if kctx <> nil then EVP_PKEY_CTX_free(kctx);  // garde si Exit avant finally interne
+  end;
+end;
+
+
+//PKCS#8
+function generate_rsa_key_2: boolean;
+var
+  kctx      : PEVP_PKEY_CTX = nil;
+  pkey      : PEVP_PKEY     = nil;
+  bp_public : pBIO           = nil;
+  bp_private: pBIO           = nil;
+  basePath  : string;
+begin
+  result   := false;
+  basePath := IncludeTrailingPathDelimiter(GetCurrentDir);
+
+  try
+    // =========================================================
+    // 1. Génération de la clé RSA 2048 bits
+    //    Remplace : RAND_poll + BN_new + BN_set_word +
+    //               RSA_new + RSA_generate_key_ex +
+    //               EVP_PKEY_new + EVP_PKEY_assign
+    // =========================================================
+    log('1. generate rsa key');
+    kctx := EVP_PKEY_CTX_new_from_name(nil, 'RSA', nil);
+    if kctx = nil then Exit;
+
+    if EVP_PKEY_keygen_init(kctx) <> 1 then Exit;
+    if EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) <= 0 then Exit;
+    // Exposant 65537 (RSA_F4) : valeur par défaut d'OpenSSL 3.0
+    if EVP_PKEY_generate(kctx, @pkey) <> 1 then Exit;
+
+    // Le contexte keygen n'est plus nécessaire
+    EVP_PKEY_CTX_free(kctx);
+    kctx := nil;
+
+    // =========================================================
+    // 2. Sauvegarde de la clé publique
+    // =========================================================
+    log('2. save public key');
+    bp_public := BIO_new_file(PAnsiChar(AnsiString(basePath + 'public.pem')), 'w+');
+    if bp_public = nil then Exit;
+
+    if PEM_write_bio_PUBKEY(bp_public, pkey) <> 1 then Exit;
+    log('2. save public key OK');
+
+    // =========================================================
+    // 3. Sauvegarde de la clé privée (sans mot de passe)
+    //    Passer EVP_aes_256_cbc() en 3e paramètre et un callback
+    //    en 6e pour chiffrer la clé au repos.
+    // =========================================================
+    log('3. save private key (no password)');
+    bp_private := BIO_new_file(PAnsiChar(AnsiString(basePath + 'private.pem')), 'w+');
+    if bp_private = nil then Exit;
+
+    if PEM_write_bio_PrivateKey(bp_private, pkey, nil, nil, 0, nil, nil) <> 1 then Exit;
+    log('3. save private key OK');
+
+    result := true;
+
+  finally
+    if kctx       <> nil then EVP_PKEY_CTX_free(kctx);
+    if bp_public  <> nil then BIO_free_all(bp_public);
+    if bp_private <> nil then BIO_free_all(bp_private);
+    if pkey       <> nil then EVP_PKEY_free(pkey);
+  end;
+end;
+
+//RSA_public_encrypt, RSA_private_decrypt - RSA public key cryptography
+//versus
+//RSA_private_encrypt, RSA_public_decrypt - low-level signature operations ... using the private key rsa
+function Encrypt_Pub(sometext: string; var encrypted: string): boolean;
+var
+  FKey          : PEVP_PKEY     = nil;
+  ectx          : PEVP_PKEY_CTX = nil;
+  encBuf        : PByte         = nil;
+  encLen        : TOpenSSL_C_SIZET;
+  b64           : pBIO          = nil;
+  bio_mem       : pBIO          = nil;
+  bioChain      : pBIO          = nil;
+  input         : AnsiString;
+  b64data       : AnsiString;
+  b64len        : integer;
+  err           : Cardinal;
+begin
+  result := false;
+
+  // =========================================================
+  // 1. Chargement de la clé publique
+  // =========================================================
+  FKey := LoadPublicKey('public.pem');
+  if FKey = nil then Exit;
+
+  try
+    // =========================================================
+    // 2. Création du contexte de chiffrement
+    //    Remplace : EVP_PKEY_get1_RSA + RSA_size + RSA_public_encrypt
+    // =========================================================
+    ectx := EVP_PKEY_CTX_new_from_pkey(nil, FKey, nil);
+    if ectx = nil then Exit;
+
+    if EVP_PKEY_encrypt_init(ectx) <> 1 then Exit;
+
+    // PKCS1_PADDING conservé pour la compatibilité avec l'original.
+    // Préférer RSA_PKCS1_OAEP_PADDING pour les nouveaux développements.
+    if EVP_PKEY_CTX_set_rsa_padding(ectx, RSA_PKCS1_PADDING) <= 0 then Exit;
+
+    input := AnsiString(sometext);
+
+    // --- Passe 1 : déterminer la taille du buffer de sortie ---
+    encLen := 0;
+    if EVP_PKEY_encrypt(ectx, nil, @encLen,
+                        PByte(@input[1]), Length(input)) <> 1 then Exit;
+
+    log('EVP_PKEY_encrypt outlen: ' + IntToStr(encLen));
+
+    // --- Passe 2 : chiffrement effectif ---
+    GetMem(encBuf, encLen);
+    try
+      if EVP_PKEY_encrypt(ectx, encBuf, @encLen,
+                          PByte(@input[1]), Length(input)) <> 1 then
+      begin
+        err := ERR_get_error;
+        repeat
+          log(string(ERR_error_string(err, nil)), 1);
+          err := ERR_get_error;
+        until err = 0;
+        Exit;
+      end;
+
+      log('EVP_PKEY_encrypt: ' + IntToStr(encLen) + ' bytes chiffrés');
+
+      // =========================================================
+      // 3. Encodage Base64 via chaîne BIO
+      //    b64 → bio_mem ; on écrit dans la chaîne, on lit depuis bio_mem
+      // =========================================================
+      b64     := BIO_new(BIO_f_base64());
+      bio_mem := BIO_new(BIO_s_mem());
+      if (b64 = nil) or (bio_mem = nil) then Exit;
+
+      BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);  // pas de saut de ligne
+      bioChain := BIO_push(b64, bio_mem);           // b64 écrit dans bio_mem
+      b64 := nil;                                   // appartient maintenant à la chaîne
+
+      try
+        if BIO_write(bioChain, encBuf, encLen) <= 0 then Exit;
+        BIO_flush(bioChain);
+
+        // Lire le résultat Base64 depuis bio_mem
+        b64len := BIO_pending(bio_mem);
+        SetLength(b64data, b64len);
+        if BIO_read(bio_mem, @b64data[1], b64len) <> b64len then Exit;
+
+        encrypted := string(b64data);
+        log('Base64 len: ' + IntToStr(b64len));
+      finally
+        BIO_free_all(bioChain);  // libère b64 + bio_mem
+        bioChain := nil;
+      end;
+
+    finally
+      FreeMem(encBuf);
+      encBuf := nil;
+    end;
+
+    result := true;
+
+  finally
+    if ectx    <> nil then EVP_PKEY_CTX_free(ectx);
+    if FKey    <> nil then EVP_PKEY_free(FKey);
+    // b64 et bio_mem libérés par BIO_free_all(bioChain) sauf en cas
+    // d'Exit avant BIO_push ; les gardes ci-dessous couvrent ce cas.
+    if b64     <> nil then BIO_free(b64);
+    if bio_mem <> nil then BIO_free(bio_mem);
+  end;
+end;
+
+{
+-Generate private key
+openssl genrsa 2048 > private2.pem
+-Generate public key from private
+openssl rsa -in private2.pem -pubout > public2.pem
+}
+function Decrypt_Priv(ACryptedData: string): boolean;
+var
+  FKey     : PEVP_PKEY     = nil;
+  dctx     : PEVP_PKEY_CTX = nil;
+  // décodage Base64
+  b64      : pBIO           = nil;
+  bio_mem  : pBIO           = nil;
+  bioChain : pBIO           = nil;
+  binBuf   : PByte          = nil;
+  binLen   : integer;
+  // déchiffrement
+  outBuf   : PByte          = nil;
+  outLen   : TOpenSSL_C_SIZET;
+  // résultat
+  plainText: AnsiString;
+  err      : TOpenSSL_C_ULONG;
+begin
+  result := false;
+
+  // =========================================================
+  // 1. Chargement de la clé privée
+  // =========================================================
+  FKey := LoadPrivateKey('private.pem');
+  if FKey = nil then
+  begin
+    err := ERR_get_error;
+    repeat
+      log(string(ERR_error_string(err, nil)), 1);
+      err := ERR_get_error;
+    until err = 0;
+    Exit;
+  end;
+
+  try
+    // =========================================================
+    // 2. Décodage Base64 → buffer binaire
+    //    Symétrique de l'encodage fait dans Encrypt_Pub :
+    //    on chaîne b64 → bio_mem et on lit depuis bio_mem.
+    // =========================================================
+    log('Base64 decode, input len: ' + IntToStr(Length(ACryptedData)));
+
+    b64     := BIO_new(BIO_f_base64());
+    bio_mem := BIO_new_mem_buf(PAnsiChar(AnsiString(ACryptedData)),
+                               Length(ACryptedData));
+    if (b64 = nil) or (bio_mem = nil) then Exit;
+
+    BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+    bioChain := BIO_push(b64, bio_mem);
+    b64     := nil;   // appartient à la chaîne
+    bio_mem := nil;
+
+    try
+      // Allouer un buffer de la taille max possible (= longueur Base64,
+      // le décodé sera toujours plus court ou égal).
+      GetMem(binBuf, Length(ACryptedData));
+      binLen := BIO_read(bioChain, binBuf, Length(ACryptedData));
+      log('BIO_read (bin): ' + IntToStr(binLen));
+      if binLen <= 0 then Exit;
+    finally
+      BIO_free_all(bioChain);
+      bioChain := nil;
+    end;
+
+    // =========================================================
+    // 3. Déchiffrement RSA avec la clé privée
+    //    Remplace : EVP_PKEY_get1_RSA + RSA_size + RSA_private_decrypt
+    // =========================================================
+    dctx := EVP_PKEY_CTX_new_from_pkey(nil, FKey, nil);
+    if dctx = nil then Exit;
+
+    if EVP_PKEY_decrypt_init(dctx) <> 1 then Exit;
+
+    // Conserver RSA_PKCS1_PADDING pour la compatibilité avec Encrypt_Pub.
+    // Passer à RSA_PKCS1_OAEP_PADDING si Encrypt_Pub est aussi mis à jour.
+    if EVP_PKEY_CTX_set_rsa_padding(dctx, RSA_PKCS1_PADDING) <= 0 then Exit;
+
+    // Passe 1 : obtenir la taille du buffer de sortie
+    outLen := 0;
+    if EVP_PKEY_decrypt(dctx, nil, @outLen, binBuf, binLen) <> 1 then Exit;
+
+    log('EVP_PKEY_decrypt outlen: ' + IntToStr(outLen));
+
+    // Passe 2 : déchiffrement effectif
+    GetMem(outBuf, outLen);
+    if EVP_PKEY_decrypt(dctx, outBuf, @outLen, binBuf, binLen) <> 1 then
+    begin
+      err := ERR_get_error;
+      repeat
+        log(string(ERR_error_string(err, nil)), 1);
+        err := ERR_get_error;
+      until err = 0;
+      Exit;
+    end;
+
+    // =========================================================
+    // 4. Récupération du texte clair
+    // =========================================================
+    SetLength(plainText, outLen);
+    Move(outBuf^, plainText[1], outLen);
+    log('Decrypted: ' + string(plainText));
+
+    result := true;
+
+  finally
+    if dctx     <> nil then EVP_PKEY_CTX_free(dctx);
+    if FKey     <> nil then EVP_PKEY_free(FKey);
+    if binBuf   <> nil then FreeMem(binBuf);
+    if outBuf   <> nil then FreeMem(outBuf);
+    // gardes si Exit avant BIO_push
+    if b64      <> nil then BIO_free(b64);
+    if bio_mem  <> nil then BIO_free(bio_mem);
+    if bioChain <> nil then BIO_free_all(bioChain);
+  end;
+end;
+
+procedure PrintFingerprint(cert: PX509);
+var
+md: array[0..EVP_MAX_MD_SIZE - 1] of Byte;
+md_len: Cardinal; i: Integer;
+begin
+        if X509_digest(cert, EVP_sha1(), @md, @md_len) = 0 then
+        begin
+        WriteLn('Error computing fingerprint');
+        Exit;
+        end;
+        Write('Fingerprint (SHA-1): ');
+        for i := 0 to md_len - 1 do Write(IntToHex(md[i], 2)); WriteLn;
+end;
+
+function print_req(filename:string):boolean;
+var
+ bp:pbio;
+ X509_REQ:pX509_REQ;
+ name:pX509_NAME=nil;
+ b64len,key_len,i,size:cardinal;
+ key:pEVP_PKEY;
+ bio_mem,bio_base64,bio:pBIO;
+ data:array [0..4095] of char;
+ key_buf,pb:pbyte;
+ digest:array [0..EVP_MAX_MD_SIZE-1] of byte;
+begin
+  result:=false;
+  bp := BIO_new_file(pchar(filename), 'r+');
+  log('PEM_read_bio_X509_REQ');
+  X509_REQ := PEM_read_bio_X509_REQ(bp, nil, nil, nil);
+  BIO_free(bp);
+
+  log('X509_REQ_get_subject_name');
+  NAME:=X509_REQ_get_subject_name(X509_REQ);
+  writeln('subject_name:'+getdn(name));
+
+  log('X509_REQ_get_pubkey');
+  key:=X509_REQ_get_pubkey (X509_REQ);
+  //lets display the pubkey
+  bio_mem := BIO_new(BIO_s_mem());
+  bio_base64 := BIO_new(BIO_f_base64());
+  bio:=BIO_push(bio_base64, bio_mem);
+  //write to bio
+  PEM_write_bio_PUBKEY(bio_base64, key );
+  Bio_flush(bio_base64);
+  //read from bio
+  b64len:=BIO_read(bio_base64, @data[0], sizeof(data)-1);
+  writeln();
+  data[b64len] := #0;
+  writeln('Public key base64:');
+  writeln(data);
+  //EVP_PKEY_free(key);
+  BIO_free_all(bio_base64);//BIO_free(bio_base64);BIO_free(bio_mem);
+
+  key_len := i2d_PUBKEY(key, nil);
+  GetMem(key_buf, key_len);
+  pb:=key_buf ; //https://stackoverflow.com/questions/50952528/get-publickey-certificate-in-der-format-with-openssl-in-c
+  key_len := i2d_PUBKEY(key, @key_buf);
+  writeln('Public key hex:');
+  for i := 0 to key_len - 1 do Write(IntToHex(pb[i], 2));
+  writeln;
+
+  if evp_digest(pb , key_len,@digest[0],@size,EVP_sha1(),nil)=1 then
+     begin
+     writeln('Public key hash (sha1):');
+     for i:=0 to size -1 do write(inttohex(digest[i],2));
+     writeln;
+     end;
+
+  result:=true;
+end;
+
+//openssl rsa -noout -text -in ca.key
+function print_private(filename: string; password: string = ''): boolean;
+const
+  // Constante OpenSSL 3.0 pour le paramètre "modulus" d'une clé RSA.
+  // Définie dans openssl/rsa.h : #define OSSL_PKEY_PARAM_RSA_N "n"
+  OSSL_PKEY_PARAM_RSA_N = 'n';
+
+var
+  pkey        : PEVP_PKEY  = nil;
+  // clé publique DER
+  key_buf     : PByte      = nil;
+  key_buf_orig: PByte      = nil;   // garde le pointeur d'origine pour FreeMem
+  key_len     : integer;
+  // modulus RSA via EVP_PKEY_get_bn_param
+  modulus     : PBIGNUM    = nil;
+  bin         : PByte      = nil;
+  binLen      : integer;
+  // digest
+  digest      : array [0..EVP_MAX_MD_SIZE - 1] of byte;
+  dsize       : TOpenSSL_C_UINT;
+  // affichage PEM clé publique
+  bio_mem     : pBIO       = nil;
+  bio_base64  : pBIO       = nil;
+  bioChain    : pBIO       = nil;
+  pemData     : AnsiString;
+  pemLen      : integer;
+  // boucles
+  i           : integer;
+  hexMod      : PAnsiChar;
+begin
+  result := false;
+
+  // =========================================================
+  // 1. Chargement de la clé privée
+  // =========================================================
+  pkey := LoadPrivateKey(filename, password);
+  if pkey = nil then Exit;
+
+  try
+    // =========================================================
+    // 2. Affichage de la clé publique en PEM (Base64)
+    //    BIO_read depuis bio_mem (pas depuis le filtre b64)
+    //    pour obtenir le PEM déjà formaté par OpenSSL.
+    // =========================================================
+    bio_mem    := BIO_new(BIO_s_mem());
+    bio_base64 := BIO_new(BIO_f_base64());
+    if (bio_mem = nil) or (bio_base64 = nil) then Exit;
+
+    bioChain := BIO_push(bio_base64, bio_mem);
+    bio_base64 := nil;   // appartient à la chaîne
+
+    PEM_write_bio_PUBKEY(bioChain, pkey);
+    BIO_flush(bioChain);
+
+    // Lire depuis bio_mem (l'extrémité mémoire de la chaîne)
+    pemLen := BIO_pending(bio_mem);
+    SetLength(pemData, pemLen);
+    BIO_read(bio_mem, @pemData[1], pemLen);
+
+    BIO_free_all(bioChain);
+    bioChain  := nil;
+    bio_mem   := nil;
+
+    WriteLn;
+    WriteLn('Public key base64:');
+    WriteLn(string(pemData));
+
+    // =========================================================
+    // 3. Clé publique en DER puis hex
+    //    i2d_PUBKEY avec out=nil donne la taille, puis alloue.
+    //    ATTENTION : i2d_PUBKEY avance le pointeur — on garde
+    //    une copie de l'adresse d'origine pour FreeMem.
+    // =========================================================
+    key_len := i2d_PUBKEY(pkey, nil);
+    if key_len <= 0 then Exit;
+
+    GetMem(key_buf, key_len);
+    key_buf_orig := key_buf;
+    key_len := i2d_PUBKEY(pkey, @key_buf);  // key_buf est avancé par OpenSSL
+
+    WriteLn('Public key hex:');
+    for i := 0 to key_len - 1 do
+      Write(IntToHex(key_buf_orig[i], 2));
+    WriteLn;
+
+    // =========================================================
+    // 4. Hash SHA-1 de la clé publique DER
+    // =========================================================
+    if EVP_Digest(key_buf_orig, key_len, @digest[0], @dsize,
+                  EVP_sha1(), nil) = 1 then
+    begin
+      WriteLn('Public key hash (sha1):');
+      for i := 0 to integer(dsize) - 1 do
+        Write(IntToHex(digest[i], 2));
+      WriteLn;
+    end;
+
+    // =========================================================
+    // 5. Modulus RSA (n) via EVP_PKEY_get_bn_param
+    //    Remplace : EVP_PKEY_get1_RSA + RSA_get0_n (dépréciés 3.0)
+    //    EVP_PKEY_get_bn_param alloue le BIGNUM si *bn = nil.
+    // =========================================================
+    modulus := nil;
+    if EVP_PKEY_get_bn_param(pkey, OSSL_PKEY_PARAM_RSA_N, @modulus) <> 1 then
+      Exit;
+
+    WriteLn;
+    WriteLn('Modulus:');
+    hexMod := BN_bn2hex(modulus);
+    if hexMod <> nil then
+    begin
+      WriteLn(string(AnsiString(hexMod)));
+      OPENSSL_free(hexMod);   // BN_bn2hex alloue avec OPENSSL_malloc
+    end;
+
+    // =========================================================
+    // 6. Hash SHA-1 du modulus binaire
+    // =========================================================
+    binLen := BN_num_bytes(modulus);
+    GetMem(bin, binLen);
+    BN_bn2bin(modulus, bin);
+
+    if EVP_Digest(bin, binLen, @digest[0], @dsize, EVP_sha1(), nil) = 1 then
+    begin
+      Write('Modulus hash sha1: ');
+      for i := 0 to integer(dsize) - 1 do
+        Write(IntToHex(digest[i], 2));
+      WriteLn;
+    end;
+
+    result := true;
+
+  finally
+    if pkey         <> nil then EVP_PKEY_free(pkey);
+    if modulus      <> nil then BN_free(modulus);
+    if key_buf_orig <> nil then FreeMem(key_buf_orig);
+    if bin          <> nil then FreeMem(bin);
+    // gardes si Exit avant BIO_push
+    if bio_base64   <> nil then BIO_free(bio_base64);
+    if bio_mem      <> nil then BIO_free(bio_mem);
+    if bioChain     <> nil then BIO_free_all(bioChain);
+  end;
+end;
+
+function getSerialNumber(x509:px509): String;
+var
+   Buffer : array [0..31] of char;
+   v: pASN1_OCTET_STRING ;
+   b:byte;
+begin
+  result:='';
+   v := X509_get_serialNumber(x509);
+   //StrLCopy(pansichar(@buffer), v^.data, v^.length);
+   for b:=0 to v^.length-1 do result:=result+inttohex(pbyte(v^.data)[b],2); //to be checked
+   //Result:=Buffer;
+end;
+
+function getDN(pDn: pX509_NAME): String;
+var
+  buffer: array [0..1023] of char;
+begin
+X509_NAME_oneline(pDn, @buffer, SizeOf(buffer));
+result := StrPas(@buffer);
+end;
+
+// Extract a ASN1 time
+
+function getTime(asn1_time: pASN1_TIME): TDateTime;
+var
+  tm: TOpenSSL_C_TM;
+begin
+  // =========================================================
+  // OpenSSL 3.0 : ASN1_TIME_to_tm remplace l'analyse manuelle
+  // des octets V_ASN1_UTCTIME / V_ASN1_GENERALIZEDTIME.
+  // Elle gère les deux formats, les secondes optionnelles,
+  // le suffixe 'Z' (UTC) et les offsets +HH:MM automatiquement.
+  // Disponible depuis OpenSSL 1.1.1d ; déclarée dans openssl_asn1.
+  // =========================================================
+  FillChar(tm, SizeOf(tm), 0);
+
+  if ASN1_TIME_to_tm(asn1_time, @tm) <> 1 then
+    raise Exception.Create('Invalid ASN1 date format.');
+
+  // TOpenSSL_C_TM suit la convention C struct tm :
+  //   tm_year = années depuis 1900
+  //   tm_mon  = mois 0..11
+  result := EncodeDateTime(
+    tm.tm_year + 1900,   // année absolue
+    tm.tm_mon  + 1,      // mois 1..12
+    tm.tm_mday,
+    tm.tm_hour,
+    tm.tm_min,
+    tm.tm_sec,
+    0);
+end;
+
+
+//openssl x509 -noout -text -in ca.crt
+//openssl pkey -in ca.key -pubout -outform pem
+//openssl x509 -in certificate.crt -pubkey -noout -outform pem
+function print_cert(filename: string): boolean;
+const
+  OSSL_PKEY_PARAM_RSA_N = 'n';
+var
+  bp          : pBIO           = nil;
+  x509        : pX509          = nil;
+  key         : pEVP_PKEY      = nil;
+  modulus     : PBIGNUM        = nil;
+  certs       : pSTACK_OFX509  = nil;
+  name        : pX509_NAME     = nil;
+  usage       : PASN1_BIT_STRING = nil;
+  // clé publique PEM
+  bio_mem     : pBIO           = nil;
+  bio_base64  : pBIO           = nil;
+  bioChain    : pBIO           = nil;
+  pemData     : AnsiString;
+  pemLen      : integer;
+  // clé publique DER
+  key_buf     : PByte          = nil;
+  key_buf_orig: PByte          = nil;
+  key_len     : integer;
+  // modulus binaire
+  bin         : PByte          = nil;
+  binLen      : integer;
+  hexMod      : PAnsiChar;
+  // digest
+  digest      : array [0..EVP_MAX_MD_SIZE - 1] of byte;
+  dsize       : TOpenSSL_C_UINT;
+  // boucles
+  num, i      : integer;
+begin
+  result := false;
+
+  // =========================================================
+  // 1. Lecture de tous les certificats du fichier PEM
+  // =========================================================
+  bp := BIO_new_file(PAnsiChar(AnsiString(filename)), 'r+');
+  if bp = nil then Exit;
+
+  certs := openssl_sk_new_null();
+  while true do
+  begin
+    x509 := PEM_read_bio_X509(bp, nil, nil, nil);
+    if x509 = nil then Break;
+    openssl_sk_push(certs, x509);
+  end;
+  BIO_free(bp);
+  bp := nil;
+
+  // =========================================================
+  // 2. Itération sur chaque certificat
+  // =========================================================
+  for num := 0 to openssl_sk_num(certs) - 1 do
+  begin
+    x509 := openssl_sk_value(certs, num);
+    WriteLn('***********************************************');
+
+    // --- Subject / Issuer ---
+    name := X509_get_subject_name(x509);
+    WriteLn('subject_name: ' + getdn(name));
+
+    name := X509_get_issuer_name(x509);
+    WriteLn('issuer_name: '  + getdn(name));
+
+    // =========================================================
+    // 3. Clé publique — PEM (Base64)
+    //    Lire depuis bio_mem, pas depuis le filtre b64
+    // =========================================================
+    key := X509_get_pubkey(x509);
+
+    bio_mem    := BIO_new(BIO_s_mem());
+    bio_base64 := BIO_new(BIO_f_base64());
+    if (bio_mem <> nil) and (bio_base64 <> nil) then
+    begin
+      bioChain   := BIO_push(bio_base64, bio_mem);
+      bio_base64 := nil;   // appartient à la chaîne
+
+      PEM_write_bio_PUBKEY(bioChain, key);
+      BIO_flush(bioChain);
+
+      pemLen := BIO_pending(bio_mem);
+      SetLength(pemData, pemLen);
+      BIO_read(bio_mem, @pemData[1], pemLen);
+
+      BIO_free_all(bioChain);
+      bioChain := nil;
+      bio_mem  := nil;
+
+      WriteLn;
+      WriteLn('Public key base64:');
+      WriteLn(string(pemData));
+    end;
+
+    // =========================================================
+    // 4. Clé publique — DER + hex
+    //    Conserver le pointeur d'origine : i2d_PUBKEY l'avance
+    // =========================================================
+    key_len := i2d_PUBKEY(key, nil);
+    if key_len > 0 then
+    begin
+      GetMem(key_buf, key_len);
+      key_buf_orig := key_buf;
+      key_len := i2d_PUBKEY(key, @key_buf);
+
+      WriteLn('Public key hex:');
+      for i := 0 to key_len - 1 do
+        Write(IntToHex(key_buf_orig[i], 2));
+      WriteLn;
+
+      // Hash SHA-1 de la clé publique DER
+      if EVP_Digest(key_buf_orig, key_len, @digest[0], @dsize,
+                    EVP_sha1(), nil) = 1 then
+      begin
+        WriteLn('Public key hash (sha1):');
+        for i := 0 to integer(dsize) - 1 do
+          Write(IntToHex(digest[i], 2));
+        WriteLn;
+      end;
+
+      FreeMem(key_buf_orig);
+      key_buf      := nil;
+      key_buf_orig := nil;
+    end;
+
+    // =========================================================
+    // 5. Modulus RSA (n)
+    //    Remplace : EVP_PKEY_get1_RSA + RSA_get0_n (dépréciés 3.0)
+    // =========================================================
+    modulus := nil;
+    if EVP_PKEY_get_bn_param(key, OSSL_PKEY_PARAM_RSA_N, @modulus) = 1 then
+    begin
+      WriteLn;
+      Write('Modulus: ');
+      hexMod := BN_bn2hex(modulus);
+      if hexMod <> nil then
+      begin
+        WriteLn(LowerCase(string(AnsiString(hexMod))));
+        OPENSSL_free(hexMod);
+      end;
+
+      // Hash SHA-1 du modulus binaire
+      binLen := BN_num_bytes(modulus);
+      GetMem(bin, binLen);
+      BN_bn2bin(modulus, bin);
+
+      if EVP_Digest(bin, binLen, @digest[0], @dsize, EVP_sha1(), nil) = 1 then
+      begin
+        WriteLn('Modulus hash (sha1):');
+        for i := 0 to integer(dsize) - 1 do
+          Write(IntToHex(digest[i], 2));
+        WriteLn;
+      end;
+
+      FreeMem(bin);
+      bin := nil;
+      BN_free(modulus);
+      modulus := nil;
+    end;
+
+    EVP_PKEY_free(key);
+    key := nil;
+
+    // =========================================================
+    // 6. Key usage
+    // =========================================================
+    WriteLn;
+    WriteLn('key_usage:');
+    usage := X509_get_ext_d2i(x509, NID_key_usage, nil, nil);
+    if usage <> nil then
+    begin
+      if (Byte(usage^.data^) and $80) = $80 then WriteLn('  digitalSignature');
+      if (Byte(usage^.data^) and $40) = $40 then WriteLn('  nonRepudiation');
+      if (Byte(usage^.data^) and $20) = $20 then WriteLn('  keyEncipherment');
+      if (Byte(usage^.data^) and $10) = $10 then WriteLn('  dataEncipherment');
+      if (Byte(usage^.data^) and $08) = $08 then WriteLn('  keyAgreement');
+      if (Byte(usage^.data^) and $04) = $04 then WriteLn('  keyCertSign');
+      if (Byte(usage^.data^) and $02) = $02 then WriteLn('  cRLSign');
+      ASN1_BIT_STRING_free(usage);
+      usage := nil;
+    end;
+
+    // =========================================================
+    // 7. Validité
+    // =========================================================
+    WriteLn;
+    try
+      WriteLn('notBefore: ' + DateTimeToStr(getTime(X509_get_notBefore(x509))));
+      WriteLn('notAfter: '  + DateTimeToStr(getTime(X509_get_notAfter(x509))));
+    except
+      on e: Exception do WriteLn(e.Message);
+    end;
+
+    WriteLn;
+    PrintFingerprint(x509);
+
+  end; // for num
+
+  result := true;
+end;
+
+function set_password(filename, password: string): boolean;
+var
+  pkey: pEVP_PKEY = nil;
+  bp: pBIO = nil;
+  outPath: string;
+  passAnsi: AnsiString;
+  ret: integer;
+begin
+  result := false;
+
+  // 1. Charger la clé existante (attention si elle nécessite déjà un mot de passe pour être lue)
+  pkey := LoadPrivateKey(filename);
+  if pkey = nil then
+  begin
+    log('LoadPrivateKey failed', 1);
+    exit;
+  end;
+
+  try
+    // 2. Construire un chemin de sortie propre
+    outPath := ExtractFilePath(filename) + 'new_' + ExtractFileName(filename);
+
+    bp := BIO_new_file(PChar(outPath), 'w+');
+    if bp = nil then Exit;
+
+    try
+      log('PEM_write_bio_PrivateKey');
+
+      if password = '' then
+      begin
+        // Écriture en clair (pas de cipher -> pas de prompt)
+        ret := PEM_write_bio_PrivateKey(bp, pkey, nil, nil, 0, nil, nil);
+      end
+      else
+      begin
+        // Conversion explicite en AnsiString pour garantir la structure mémoire
+        passAnsi := AnsiString(password);
+
+        // Appeler EVP_des_ede3_cbc() comme fonction et passer PAnsiChar
+        ret := PEM_write_bio_PrivateKey(
+          bp,
+          pkey,
+          EVP_des_ede3_cbc(),
+          PByte(PAnsiChar(passAnsi)), // Transtypage en PByte requis par l'API
+          Length(passAnsi),
+          nil,
+          nil
+        );
+      end;
+
+      // PEM_write_bio_PrivateKey renvoie 1 en cas de succès (0 ou négatif en cas d'erreur)
+      result := (ret = 1);
+
+    finally
+      BIO_free(bp);
+    end;
+
+  finally
+    if pkey <> nil then EVP_PKEY_free(pkey);
+  end;
+end;
+
+procedure ciphers_sorted(cipher:pEVP_CIPHER; from:pchar;_to:pchar; x:pointer); cdecl;
+begin
+  log('ciphers');
+  if cipher<>nil then writeln(strpas(OBJ_nid2sn(EVP_CIPHER_nid(cipher))));
+end;
+
+procedure ciphers(cipher:pEVP_CIPHER; x:pointer); cdecl;
+begin
+  log('ciphers');
+  if cipher<>nil then writeln(strpas(OBJ_nid2sn(EVP_CIPHER_nid(cipher))));
+end;
+
+function list_ciphers:boolean;
+begin
+  result:=false;
+  log('list_ciphers');
+  EVP_CIPHER_do_all_sorted (@ciphers_sorted, nil);
+  result:=true;
+end;
+
+procedure hashes_sorted(hash:pEVP_MD; from:pchar;_to:pchar; x:pointer); cdecl;
+begin
+  log('hashes');
+  if hash<>nil then writeln(strpas(OBJ_nid2sn(EVP_MD_type(hash))));
+end;
+
+function list_hashes:boolean;
+begin
+  result:=false;
+  log('list_hashes');
+  EVP_MD_do_all_sorted (@hashes_sorted, nil);
+  result:=true;
+end;
+
+function crypt(algo, input: string; keystr: string = ''; ivstr: string = ''; enc: integer = 1): boolean;
+const
+  EVP_MAX_MD_SIZE = 64;
+  MD5_DIGEST_LENGTH = 16;
+var
+  context: PEVP_CIPHER_CTX;
+  cipher: PEVP_CIPHER;
+  buffer: array [0..EVP_MAX_MD_SIZE - 1] of byte;
+  buffer_len: cardinal;
+  i: byte;
+  ret, remain: integer;
+  key, iv, encrypted: array of byte;
+begin
+  result := false;
+  context := nil;
+  cipher := nil;
+  buffer_len := 0;
+
+  log('input:' + input);
+  log('algo:' + algo);
+
+  log('EVP_CIPHER_CTX_new');
+  context := EVP_CIPHER_CTX_new();
+  if context = nil then
+  begin
+    writeln('EVP_CIPHER_CTX_new failed');
+    exit;
+  end;
+
+  cipher := EVP_get_cipherbyname(pchar(algo));
+  if cipher = nil then
+  begin
+    writeln('cipher=nil');
+    EVP_CIPHER_CTX_free(context);
+    exit;
+  end;
+
+  log('cipher:' + strpas(OBJ_nid2sn(EVP_CIPHER_nid(cipher))));
+
+  // Key was supplied
+  if keystr <> '' then
+  begin
+    key := HexaStringToByte2(keystr);
+    write('key:');
+    for i := 0 to length(key) - 1 do write(inttohex(key[i], 2));
+    writeln;
+  end;
+
+  // IV was supplied
+  if ivstr <> '' then
+  begin
+    iv := HexaStringToByte2(ivstr);
+    write('iv:');
+    for i := 0 to length(iv) - 1 do write(inttohex(iv[i], 2));
+    writeln;
+  end;
+
+  // A key was NOT supplied: use a random key
+  if (EVP_CIPHER_CTX_key_length(context) > 0) and (keystr = '') then
+  begin
+    writeln('random key');
+    SetLength(key, EVP_CIPHER_CTX_key_length(context));
+    RAND_bytes(@key[0], length(key));
+    write('key:');
+    for i := 0 to length(key) - 1 do write(inttohex(key[i], 2));
+    writeln;
+  end;
+
+  // Random IV
+  if (EVP_CIPHER_CTX_iv_length(context) > 0) and (ivstr = '') then
+  begin
+    writeln('random iv');
+    SetLength(iv, EVP_CIPHER_CTX_iv_length(context));
+    RAND_bytes(@iv[0], length(iv));
+    write('iv:');
+    for i := 0 to length(iv) - 1 do write(inttohex(iv[i], 2));
+    writeln;
+  end;
+
+  log('***********************************');
+  log('key_length:' + inttostr(EVP_CIPHER_CTX_key_length(context)));
+  log('iv_length:' + inttostr(EVP_CIPHER_CTX_iv_length(context)));
+  log('block_size:' + inttostr(EVP_CIPHER_block_size(cipher)));
+  log('***********************************');
+
+  if length(key) <> EVP_CIPHER_CTX_key_length(context) then
+  begin
+    writeln('key length incorrect:' + inttostr(length(key)));
+    EVP_CIPHER_CTX_free(context);
+    exit;
+  end;
+
+  if (EVP_CIPHER_CTX_iv_length(context) > 0) and (length(iv) <> EVP_CIPHER_CTX_iv_length(context)) then
+  begin
+    writeln('iv length incorrect:' + inttostr(length(iv)));
+    EVP_CIPHER_CTX_free(context);
+    exit;
+  end;
+
+  log('EVP_CipherInit_ex');
+  if EVP_CIPHER_CTX_iv_length(context) > 0 then
+    ret := EVP_CipherInit_ex(context, cipher, nil, @key[0], @iv[0], enc)
+  else
+    ret := EVP_CipherInit_ex(context, cipher, nil, @key[0], nil, enc);
+
+  if ret <> 1 then
+  begin
+    EVP_CIPHER_CTX_free(context);
+    raise Exception.Create('EVP_CipherInit_ex failed');
+  end;
+
+  log('EVP_CipherUpdate');
+  if enc = 0 then
+  begin
+    encrypted := HexaStringToByte2(input);
+    ret := EVP_CipherUpdate(context, @buffer[0], @buffer_len, @encrypted[0], length(encrypted));
+  end
+  else
+    ret := EVP_CipherUpdate(context, @buffer[0], @buffer_len, pbyte(pointer(input)), length(input));
+
+  if ret <> 1 then
+  begin
+    EVP_CIPHER_CTX_free(context);
+    raise Exception.Create('EVP_CipherUpdate failed');
+  end;
+
+  log('EVP_CipherFinal_ex');
+  remain := 0;
+  ret := EVP_CipherFinal_ex(context, @buffer[buffer_len], @remain);
+  if ret <> 1 then
+  begin
+    EVP_CIPHER_CTX_free(context);
+    raise Exception.Create('EVP_CipherFinal_ex failed');
+  end;
+  inc(buffer_len, remain);
+
+  log('EVP_CIPHER_CTX_free');
+  EVP_CIPHER_CTX_free(context);
+
+  if buffer_len <= 0 then
+    exit;
+
+  for i := 0 to buffer_len - 1 do
+    write(inttohex(buffer[i], 2));
+  writeln;
+
+  if enc = 0 then
+  begin
+    for i := 0 to buffer_len - 1 do
+      write(chr(buffer[i]));
+    writeln;
+  end;
+
+  result := true;
+end;
+
+function hash(algo:string;input:array of byte):boolean;
+const EVP_MAX_MD_SIZE=64;
+var
+context:pEVP_MD_CTX;
+md :pEVP_MD;
+digest:array [0..EVP_MAX_MD_SIZE -1] of byte;
+digest_len:cardinal=0;
+i:byte;
+begin
+   result:=false;
+   context := EVP_MD_CTX_create();
+
+   md:=EVP_get_digestbyname(pchar(algo));
+
+   if md=nil then
+   begin
+   writeln('md=nil');
+   exit;
+   end;
+
+   log('digest:'+strpas(OBJ_nid2sn(EVP_MD_type(md))));
+   log('length(input):'+inttostr(length(input)));
+
+   EVP_DigestInit(context,md);
+   EVP_DigestUpdate(context, @input[0], length(input));
+   EVP_DigestFinal(context, @digest[0], @digest_len);
+   EVP_MD_CTX_destroy (context);
+
+   if digest_len<=0 then exit;
+   for i:=0 to digest_len -1 do write(inttohex(digest[i],2));
+   writeln;
+   result:=true;
+end;
+
+function Base64Encode(message:array of byte):boolean;
+var
+bio_mem,bio_base64,bio:pbio;
+b64len:integer=0;
+data:array [0..8192-1] of char;
+ret:integer;
+begin
+  result:=false;
+  bio_base64 := BIO_new(BIO_f_base64());
+  //BIO_set_flags(bio_base64, BIO_FLAGS_BASE64_NO_NL); //Ignore newlines - write everything in one line
+  bio_mem := BIO_new(BIO_s_mem());
+  bio:=BIO_push(bio_base64, bio_mem);
+  //write to bio
+  ret:=bio_write(bio, @message[0],length(message) );
+  log('bio_write:'+inttostr(ret));
+  Bio_flush(bio);
+  //read from bio
+  b64len:=BIO_read(bio_mem, @data[0], sizeof(data)); //sizeof(data)-1?
+  log('BIO_read:'+inttostr(b64len));
+  data[b64len] := #0;
+  writeln(data);
+  //
+  bio_free_all(bio);
+  result:=b64len<>0;
+end;
+
+function Base64Decode(message:string;utf16:boolean=false):boolean;
+var
+  bio_mem,bio_base64,bio:pbio;
+  encodedSize:integer;
+  data:array [0..8192-1] of byte;
+  ret:integer;
+begin
+  result:=false;
+  encodedSize := 4*ceil(float(length(message) / 3));
+  //log('encodedSize:'+inttostr(encodedSize));
+  log('message:'+inttostr(length(message)));
+
+  {
+  //works but not with big inputs - to be reviewed
+  ret:=EVP_DecodeBlock(@data[0],@message[1],length(message));
+  log('EVP_DecodeBlock:'+inttostr(ret));
+  }
+
+
+  bio_base64 := BIO_new(BIO_f_base64());
+  bio_mem := BIO_new_mem_buf(@message[1], length(message));
+  bio := BIO_push(bio_base64, bio_mem);
+  //BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); //Ignore newlines - write everything in one line
+  ret:=BIO_read(bio, @data[0] , length(data));
+  log('BIO_read:'+inttostr(ret));
+
+  if ret=0 then
+     begin
+     BIO_reset (bio);
+     log('set flags BIO_FLAGS_BASE64_NO_NL');
+     BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); //Ignore newlines - write everything in one line
+     ret:=BIO_read(bio, @data[0] , length(data));
+     log('BIO_read:'+inttostr(ret));
+     end;
+
+  BIO_free_all(bio);
+
+  data[ret] := 0;
+  if utf16=true
+     then writeln(ansistring(TEncoding.Unicode.GetString(data,0,ret)))
+     else writeln(strpas(@data[0]));
+
+  result:=true;
+end;
+
+function PrintSSHKey(filename:string):boolean;
+var
+  rsa: PRSA;
+  n, e: PBIGNUM;
+  bio_mem,bio_base64: PBIO;
+  key_buf: array[0..4095] of Char;
+  key_len, len: Integer;
+  buf: TBytes;
+  pubkey:pEVP_PKEY;
+begin
+  result:=false;
+
+  pubkey:=LoadPublicKey(filename);
+
+  rsa := EVP_PKEY_get0_RSA(pubkey);
+  if rsa = nil then
+  begin
+    WriteLn('Public key is not RSA');
+    Exit;
+  end;
+
+  // Get modulus and exponent
+  n := RSA_get0_n(rsa);
+  e := RSA_get0_e(rsa);
+  writeln(BN_num_bytes(bn_num_bits(e)));
+  writeln(BN_num_bytes(bn_num_bits(n)));
+
+  // Allocate buffer for modulus and exponent
+  SetLength(buf, BN_num_bytes(bn_num_bits(n)) + BN_num_bytes(bn_num_bits(e)) + 2 * SizeOf(Integer));
+
+
+  // Write exponent
+  writeln('exponent');
+  len := htonl(BN_num_bytes(bn_num_bits(e)));
+  writeln('htonl:'+inttostr(len));
+  Move(len, buf[0], SizeOf(Integer));
+  key_len := SizeOf(Integer);
+  key_len := key_len + BN_bn2binpad(e, @buf[key_len], BN_num_bytes(bn_num_bits(e)));
+  writeln(key_len);
+
+  // Write modulus
+  writeln('modulus');
+  len := htonl(BN_num_bytes(bn_num_bits(n)));
+  writeln('htonl:'+inttostr(len));
+  Move(len, buf[key_len], SizeOf(Integer));
+  key_len := key_len + SizeOf(Integer);
+  key_len := key_len + BN_bn2binpad(n, @buf[key_len], BN_num_bytes(bn_num_bits(n)));
+  writeln(key_len);
+
+  // Base64 encode
+  writeln('base64');
+  bio_mem := BIO_new(BIO_s_mem());
+  bio_base64 := BIO_new(BIO_f_base64());
+  BIO_push(bio_base64, bio_mem);
+  BIO_write(bio_base64, @buf[0], key_len);
+  BIO_flush(bio_base64);
+
+  key_len := BIO_read(bio_base64, @key_buf[0], SizeOf(key_buf) - 1);
+  writeln(key_len);
+  if key_len > 0 then
+  begin
+    key_buf[key_len] := #0;
+    WriteLn('ssh-rsa ', key_buf);
+  end
+  else
+    WriteLn('Error reading from BIO');
+
+  BIO_free_all(bio_mem);
+  result:=true;
+end;
+
+end.
+
