@@ -2,5 +2,4 @@
 <CONFIG>
   <Compiler Value="C:\FPC\3.0.0\bin\i386-Win32\fpc.exe" Date="1198548637"/>
   <Params Value=" -Twin32 -Pi386 -MObjFPC -Scghi -CX -O3 -XX -l -vewnhibq &quot;-FiC:\Users\erwan\Documents\-= SOURCES =-\delphi\system\TinySSLv3\lib\i386-win32&quot; &quot;-FuC:\Users\erwan\Documents\-= SOURCES =-\delphi\system\TinySSLv3\headers\3.0.20&quot; &quot;-FuC:\Users\erwan\Documents\-= SOURCES =-\delphi\system\TinySSLv3\&quot; &quot;-FUC:\Users\erwan\Documents\-= SOURCES =-\delphi\system\TinySSLv3\lib\i386-win32\&quot; tinySSL.lpr"/>
-  <Complete Value="False"/>
 </CONFIG>

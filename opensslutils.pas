@@ -27,6 +27,7 @@ uses
   openssl_obj_mac,   // Pour les constantes NID_*
   openssl_crypto,
   openssl_rand,
+  openssl_conf,
   openssl_err;
 
 function LoadSSL: Boolean;
@@ -803,6 +804,7 @@ begin
    end; //if FileExists ('tinyssl.ini') then
 end;
 
+{
 function add_ext(cert: PX509; nid: Integer; const Value: string;
                  issuer: pX509 = nil): Boolean;
 var
@@ -827,6 +829,51 @@ begin
   X509V3_set_ctx(@ctx[0], nil, nil, nil, nil, $10);   // CTX_TEST
   X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
   X509V3_set_nconf(@ctx[0], conf);                    // attacher la conf
+
+  AnsiVal := AnsiString(Value);
+  ex := X509V3_EXT_nconf_nid(conf, @ctx[0], nid, PAnsiChar(AnsiVal));
+  if ex = nil then
+  begin
+    log(Format('Erreur add_ext NID %d : valeur "%s"', [nid, Value]));
+    NCONF_free(conf);
+    Exit;
+  end;
+
+  if X509_add_ext(cert, ex, -1) = 1 then
+    Result := True
+  else
+    log(Format('Erreur X509_add_ext NID %d', [nid]));
+
+  X509_EXTENSION_free(ex);
+  NCONF_free(conf);
+end;
+
+}
+
+function add_ext(cert: PX509; nid: Integer; const Value: string;
+                 issuer: pX509 = nil): Boolean;
+var
+  ex      : PX509_EXTENSION = nil;
+  ctx     : array [0..127] of byte;
+  AnsiVal : AnsiString;
+  iss     : pX509;
+  conf    : pCONF;
+
+
+begin
+  Result := False;
+  log(Format('add_ext NID %d: %s', [nid, Value]));
+  if cert = nil then Exit;
+
+  if issuer <> nil then iss := issuer
+                   else iss := cert;
+
+  conf := NCONF_new(nil);
+
+  FillChar(ctx, SizeOf(ctx), 0);
+  X509V3_set_ctx(@ctx[0], nil, nil, nil, nil, $10);  // CTX_TEST
+  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
+  X509V3_set_nconf(@ctx[0], conf);                           // attacher conf au ctx
 
   AnsiVal := AnsiString(Value);
   ex := X509V3_EXT_nconf_nid(conf, @ctx[0], nid, PAnsiChar(AnsiVal));
