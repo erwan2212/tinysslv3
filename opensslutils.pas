@@ -78,6 +78,12 @@ type TC_INT   = LongInt;
 
 implementation
 
+const
+  NID_subject_key_identifier  = 82;
+  NID_key_usage               = 83;
+  NID_basic_constraints       = 87;
+  NID_ext_key_usage           = 180;
+
 
 function LoadSSL: Boolean;
 begin
@@ -797,42 +803,47 @@ begin
    end; //if FileExists ('tinyssl.ini') then
 end;
 
-function add_ext(cert: PX509; nid: Integer; const Value: string): Boolean;
+function add_ext(cert: PX509; nid: Integer; const Value: string;
+                 issuer: pX509 = nil): Boolean;
 var
-  ex: PX509_EXTENSION;
-  ctx: TX509V3_CTX;
-  AnsiVal: AnsiString;
+  ex      : PX509_EXTENSION = nil;
+  ctx     : array [0..127] of byte;
+  AnsiVal : AnsiString;
+  iss     : pX509;
+  conf    : pCONF;
 begin
   Result := False;
-  ex := nil;
-
   log(Format('add_ext NID %d: %s', [nid, Value]));
-
   if cert = nil then Exit;
 
-  // Initialisation du contexte X509V3
-  FillChar(ctx, SizeOf(TX509V3_CTX), 0);
-  X509V3_set_ctx(@ctx, cert, cert, nil, nil, 0);
+  if issuer <> nil then iss := issuer
+                   else iss := cert;
 
-  // Stockage dans une variable locale pour garantir la durée de vie du PAnsiChar
+  // Créer une CONF vide mais valide — permet à OpenSSL de résoudre
+  // tous les OID built-in dont extendedKeyUsage (clientAuth, serverAuth)
+  conf := NCONF_new(nil);
+
+  FillChar(ctx, SizeOf(ctx), 0);
+  X509V3_set_ctx(@ctx[0], nil, nil, nil, nil, $10);   // CTX_TEST
+  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
+  X509V3_set_nconf(@ctx[0], conf);                    // attacher la conf
+
   AnsiVal := AnsiString(Value);
-
-  // Utilisation directe de la fonction NID pour s'affranchir de la conversion NID -> ShortName
-  ex := X509V3_EXT_nconf_nid(nil, @ctx, nid, PAnsiChar(AnsiVal));
+  ex := X509V3_EXT_nconf_nid(conf, @ctx[0], nid, PAnsiChar(AnsiVal));
   if ex = nil then
   begin
-    log(Format('Erreur : échec de création de l''extension pour le NID %d', [nid]));
+    log(Format('Erreur add_ext NID %d : valeur "%s"', [nid, Value]));
+    NCONF_free(conf);
     Exit;
   end;
 
-  try
-    if X509_add_ext(cert, ex, -1) = 1 then
-      Result := True
-    else
-      log(Format('Erreur : échec de l''ajout de l''extension au certificat (NID %d)', [nid]));
-  finally
-    X509_EXTENSION_free(ex);
-  end;
+  if X509_add_ext(cert, ex, -1) = 1 then
+    Result := True
+  else
+    log(Format('Erreur X509_add_ext NID %d', [nid]));
+
+  X509_EXTENSION_free(ex);
+  NCONF_free(conf);
 end;
 
 // sign cert
@@ -903,124 +914,152 @@ begin
 end;
 
 //the private key of the resulting cert is the request.key
-function signreq(filename: string; cert: string; read_password: string = ''; alt: string = ''; ca: boolean = false): boolean;
+function signreq(filename: string; cert: string; read_password: string = '';
+                 alt: string = ''; ca: boolean = false): boolean;
 var
-  ret: integer;
-  pkey: PEVP_PKEY = nil;
-  pktmp: PEVP_PKEY = nil;
-  x509_ca: pX509 = nil;
-  x509_cert: pX509 = nil;
-  X509_REQ: pX509_REQ = nil;
-  bp: pBIO = nil;
-  serial: integer = 1;
-  days: long = 365 * 24 * 3600; // 1 year
-  value: string;
-label free_all;
+  pkey      : PEVP_PKEY  = nil;
+  pktmp     : PEVP_PKEY  = nil;
+  x509_ca   : pX509       = nil;
+  x509_cert : pX509       = nil;
+  x509_req  : pX509_REQ  = nil;
+  bp        : pBIO        = nil;
+  serial    : integer     = 1;
+  days      : Int64       = 365 * 24 * 3600;  // 1 an en secondes
+  value     : string;
+  ret       : integer;
 begin
   log('signreq');
   log('filename:' + filename);
-  log('cert:' + cert);
+  log('cert:'     + cert);
   result := false;
 
-  // 1. Load CA Certificate
-  bp := BIO_new_file(pchar(cert), 'r+');
-  if bp = nil then goto free_all;
-  log('PEM_read_bio_X509');
-  x509_ca := PEM_read_bio_X509(bp, nil, nil, nil);
-  BIO_free(bp);
-  bp := nil;
-  if x509_ca = nil then goto free_all;
-
-  // 2. Load CA Private Key
   try
-    pkey := LoadPrivateKey(ChangeFileExt(cert, '.key'), read_password);
-  except
-    on e: Exception do
-    begin
-      log(e.message, 1);
-      pkey := nil;
-    end;
-  end;
-  // Test d'échec sorti du bloc try..except pour éviter le "Jump outside of an exception block"
-  if pkey = nil then goto free_all;
-
-  // 3. Load CSR (X509 REQ)
-  bp := BIO_new_file(pchar(filename), 'r+');
-  if bp = nil then goto free_all;
-  log('PEM_read_bio_X509_REQ');
-  X509_REQ := PEM_read_bio_X509_REQ(bp, nil, nil, nil);
-  BIO_free(bp);
-  bp := nil;
-  if X509_REQ = nil then goto free_all;
-
-  // 4. Create new X509 Cert
-  x509_cert := X509_new();
-  if x509_cert = nil then goto free_all;
-
-  // Set Version (v3 = 2)
-  log('X509_set_version');
-  X509_set_version(x509_cert, 2);
-
-  // Set Serial
-  log('X509_get_serialNumber');
-  ASN1_INTEGER_set(X509_get_serialNumber(x509_cert), serial);
-
-  // Set Issuer Name from CA
-  log('X509_set_issuer_name');
-  X509_set_issuer_name(x509_cert, X509_get_subject_name(x509_ca));
-
-  // Set Validity Dates
-  X509_gmtime_adj(X509_get_notBefore(x509_cert), 0);
-  X509_gmtime_adj(X509_get_notAfter(x509_cert), days);
-
-  // Set Subject Name from REQ
-  log('X509_set_subject_name');
-  X509_set_subject_name(x509_cert, X509_REQ_get_subject_name(X509_REQ));
-
-  // Set Public Key from REQ
-  pktmp := X509_REQ_get_pubkey(X509_REQ);
-  if pktmp = nil then goto free_all;
-  log('X509_set_pubkey');
-  ret := X509_set_pubkey(x509_cert, pktmp);
-  EVP_PKEY_free(pktmp);
-  if ret <> 1 then goto free_all;
-
-  // Extensions
-  if ca then add_ext(x509_cert, NID_basic_constraints, 'critical,CA:true');
-  if alt <> '' then add_ext(x509_cert, NID_subject_alt_name, pchar(alt));
-
-  value := ini_readstring('req_ext', 'key_usage');
-  if value <> '' then add_ext(x509_cert, NID_key_usage, pchar(value));
-
-  value := ini_readstring('req_ext', 'subject_key_identifier');
-  if value = 'hash' then hash_pubkey(x509_cert);
-
-  value := ini_readstring('req_ext', 'ext_key_usage');
-  if value <> '' then add_ext(x509_cert, NID_ext_key_usage, pchar(value));
-
-  // 5. SIGN THE CERTIFICATE (Signature SHA-256 valide)
-  log('X509_sign');
-  if X509_sign(x509_cert, pkey, EVP_sha256()) = 0 then
-  begin
-    log('Signature X509_sign failed', 1);
-    goto free_all;
-  end;
-
-  // 6. Save Certificate
-  bp := BIO_new_file(pchar(ChangeFileExt(filename, '.crt')), 'w+');
-  if bp <> nil then
-  begin
-    log('PEM_write_bio_X509');
-    ret := PEM_write_bio_X509(bp, x509_cert);
+    // =========================================================
+    // 1. Chargement du certificat CA
+    // =========================================================
+    bp := BIO_new_file(PAnsiChar(AnsiString(cert)), 'r+');
+    if bp = nil then Exit;
+    log('PEM_read_bio_X509');
+    x509_ca := PEM_read_bio_X509(bp, nil, nil, nil);
     BIO_free(bp);
-    if ret = 1 then result := true;
-  end;
+    bp := nil;
+    if x509_ca = nil then Exit;
 
-free_all:
-  if x509_cert <> nil then X509_free(x509_cert);
-  if X509_REQ <> nil then X509_REQ_free(X509_REQ);
-  if x509_ca <> nil then X509_free(x509_ca);
-  if pkey <> nil then EVP_PKEY_free(pkey);
+    // =========================================================
+    // 2. Chargement de la clé privée CA
+    // =========================================================
+    try
+      pkey := LoadPrivateKey(ChangeFileExt(cert, '.key'), read_password);
+    except
+      on e: Exception do
+      begin
+        log(e.Message, 1);
+        pkey := nil;
+      end;
+    end;
+    if pkey = nil then Exit;
+
+    // =========================================================
+    // 3. Chargement du CSR
+    // =========================================================
+    bp := BIO_new_file(PAnsiChar(AnsiString(filename)), 'r+');
+    if bp = nil then Exit;
+    log('PEM_read_bio_X509_REQ');
+    x509_req := PEM_read_bio_X509_REQ(bp, nil, nil, nil);
+    BIO_free(bp);
+    bp := nil;
+    if x509_req = nil then Exit;
+
+    // =========================================================
+    // 4. Création du certificat X.509 v3
+    // =========================================================
+    x509_cert := X509_new();
+    if x509_cert = nil then Exit;
+
+    log('X509_set_version');
+    X509_set_version(x509_cert, 2);   // v3
+
+    log('X509_get_serialNumber');
+    ASN1_INTEGER_set(X509_get_serialNumber(x509_cert), serial);
+
+    // Issuer = subject de la CA
+    log('X509_set_issuer_name');
+    X509_set_issuer_name(x509_cert, X509_get_subject_name(x509_ca));
+
+    // Validité
+    X509_gmtime_adj(X509_get_notBefore(x509_cert), 0);
+    X509_gmtime_adj(X509_get_notAfter(x509_cert),  days);
+
+    // Subject = subject du CSR
+    log('X509_set_subject_name');
+    X509_set_subject_name(x509_cert, X509_REQ_get_subject_name(x509_req));
+
+    // Clé publique extraite du CSR
+    pktmp := X509_REQ_get_pubkey(x509_req);
+    if pktmp = nil then Exit;
+    log('X509_set_pubkey');
+    ret := X509_set_pubkey(x509_cert, pktmp);
+    EVP_PKEY_free(pktmp);
+    pktmp := nil;
+    if ret <> 1 then Exit;
+
+    // =========================================================
+    // 5. Extensions X.509v3
+    //    On passe x509_ca comme issuer pour que X509V3_set_ctx
+    //    puisse résoudre toutes les extensions (ext_key_usage, etc.)
+    // =========================================================
+    if ca then
+      add_ext(x509_cert, NID_basic_constraints, 'critical,CA:true', x509_ca);
+
+    if alt <> '' then
+      add_ext(x509_cert, NID_subject_alt_name, alt, x509_ca);
+
+    value := ini_readstring('req_ext', 'key_usage');
+    if value <> '' then
+      add_ext(x509_cert, NID_key_usage, value, x509_ca);
+
+    value := ini_readstring('req_ext', 'subject_key_identifier');
+    if value = 'hash' then hash_pubkey(x509_cert);
+
+    value := ini_readstring('req_ext', 'ext_key_usage');
+    if value <> '' then
+      add_ext(x509_cert, NID_ext_key_usage, value, x509_ca);
+
+    // =========================================================
+    // 6. Signature SHA-256
+    // =========================================================
+    log('X509_sign');
+    if X509_sign(x509_cert, pkey, EVP_sha256()) = 0 then
+    begin
+      log('X509_sign failed', 1);
+      Exit;
+    end;
+
+    // =========================================================
+    // 7. Écriture du certificat signé
+    // =========================================================
+    bp := BIO_new_file(
+            PAnsiChar(AnsiString(ChangeFileExt(filename, '.crt'))), 'w+');
+    if bp = nil then Exit;
+    try
+      log('PEM_write_bio_X509');
+      ret := PEM_write_bio_X509(bp, x509_cert);
+    finally
+      BIO_free(bp);
+      bp := nil;
+    end;
+    if ret <> 1 then Exit;
+
+    result := true;
+
+  finally
+    if bp        <> nil then BIO_free(bp);
+    if pktmp     <> nil then EVP_PKEY_free(pktmp);
+    if x509_cert <> nil then X509_free(x509_cert);
+    if x509_req  <> nil then X509_REQ_free(x509_req);
+    if x509_ca   <> nil then X509_free(x509_ca);
+    if pkey      <> nil then EVP_PKEY_free(pkey);
+  end;
 end;
 
 
@@ -1201,15 +1240,21 @@ begin
       add_ext(x509, NID_basic_constraints, 'critical,CA:TRUE');
 
     value := ini_readstring('cert_ext', 'key_usage');
-    if value = '' then value := 'digitalSignature';
-    add_ext(x509, NID_key_usage, PAnsiChar(AnsiString(value)));
+    //if value = '' then value := 'digitalSignature';
+    // Valeur par défaut selon le type de certificat
+    if ca then
+      if value = '' then value := 'critical,keyCertSign,cRLSign'
+    else
+      if value = '' then value := 'digitalSignature';
+    log('NID_key_usage=' + IntToStr(NID_key_usage) + ' value=' + value);
+    add_ext(x509, NID_key_usage, value);
 
     value := ini_readstring('cert_ext', 'subject_key_identifier');
     if value = 'hash' then hash_pubkey(x509);
 
     value := ini_readstring('cert_ext', 'ext_key_usage');
     if value <> '' then
-      add_ext(x509, NID_ext_key_usage, PAnsiChar(AnsiString(value)));
+    add_ext(x509, NID_key_usage, value);
 
     { =========================================================
       8. Signature du certificat avec SHA-256
@@ -2532,20 +2577,24 @@ begin
 end;
 
 function PrintSSHKey(filename: string): Boolean;
+const
+  OSSL_PKEY_PARAM_RSA_N = 'n';
+  OSSL_PKEY_PARAM_RSA_E = 'e';
 var
-  pubkey: PEVP_PKEY;
-  rsa: PRSA;
-  n, e: PBIGNUM;
+  pubkey      : PEVP_PKEY = nil;
+  n           : PBIGNUM   = nil;
+  e           : PBIGNUM   = nil;
   n_len, e_len: Integer;
-  key_type: PAnsiChar;
+  key_type    : PAnsiChar;
   key_type_len: Integer;
-  buf: TBytes;
-  offset: Integer;
-
-  bio_mem, bio_b64: PBIO;
-  b64_ptr: PAnsiChar;
-  b64_len: LongInt;
-  b64_str: string;
+  buf         : TBytes;
+  offset      : Integer;
+  bio_mem     : PBIO      = nil;
+  bio_b64     : PBIO      = nil;
+  bioChain    : PBIO      = nil;
+  b64_ptr     : PAnsiChar;
+  b64_len     : LongInt;
+  b64_str     : string;
 begin
   Result := False;
 
@@ -2557,73 +2606,80 @@ begin
   end;
 
   try
-    rsa := EVP_PKEY_get0_RSA(pubkey);
-    if rsa = nil then
+    // =========================================================
+    // 1. Récupération de n et e via EVP_PKEY_get_bn_param
+    //    Remplace : EVP_PKEY_get0_RSA + RSA_get0_key (dépréciés 3.0)
+    //    EVP_PKEY_get_bn_param alloue le BIGNUM si *bn = nil.
+    // =========================================================
+    if EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_RSA_N, @n) <> 1 then
     begin
-      WriteLn('Public key is not RSA');
+      WriteLn('Failed to get RSA modulus (n)');
       Exit;
     end;
 
-    // Récupération de n et e
-    n := nil;
-    e := nil;
-    RSA_get0_key(rsa, @n, @e, nil);
-
-    if (n = nil) or (e = nil) then
+    if EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_RSA_E, @e) <> 1 then
     begin
-      WriteLn('Failed to get RSA parameters');
+      WriteLn('Failed to get RSA exponent (e)');
       Exit;
     end;
 
-    // Calcul des tailles exactes des BIGNUM
-    n_len := BN_num_bytes(n);
-    e_len := BN_num_bytes(e);
+    // =========================================================
+    // 2. Calcul des longueurs avec padding MSB (format OpenSSH)
+    //    Si le bit de poids fort est à 1, OpenSSH exige un octet
+    //    0x00 préfixé pour signifier un entier positif (big-endian
+    //    signé). BN_bn2binpad gère le remplissage à gauche.
+    // =========================================================
+    n_len := BN_num_bytes((n));
+    e_len := BN_num_bytes((e));
 
-    // Ajustement MSB : Ajouter 0x00 si le premier bit du BIGNUM est à 1 (Format OpenSSH)
-    if (BN_is_bit_set(n, (n_len * 8) - 1)) then Inc(n_len);
-    if (BN_is_bit_set(e, (e_len * 8) - 1)) then Inc(e_len);
+    if BN_is_bit_set(n, (n_len * 8) - 1) <> 0 then Inc(n_len);
+    if BN_is_bit_set(e, (e_len * 8) - 1) <> 0 then Inc(e_len);
 
-    key_type := 'ssh-rsa';
+    key_type     := 'ssh-rsa';
     key_type_len := Length(key_type);
 
-    // Allocation du buffer binaire exact :
-    // [4 bytes: len(type)] + [string: type] + [4 bytes: len(e)] + [e] + [4 bytes: len(n)] + [n]
+    // =========================================================
+    // 3. Construction du buffer binaire OpenSSH :
+    //    [4: len(type)][type][4: len(e)][e][4: len(n)][n]
+    // =========================================================
     SetLength(buf, SizeOf(Integer) + key_type_len +
                    SizeOf(Integer) + e_len +
                    SizeOf(Integer) + n_len);
-
     offset := 0;
 
-    // 1. Écriture du type de clé ("ssh-rsa")
+    // Type de clé
     PInteger(@buf[offset])^ := htonl(key_type_len);
     Inc(offset, SizeOf(Integer));
     Move(key_type[1], buf[offset], key_type_len);
     Inc(offset, key_type_len);
 
-    // 2. Écriture de l'exposant e
+    // Exposant e
     PInteger(@buf[offset])^ := htonl(e_len);
     Inc(offset, SizeOf(Integer));
     BN_bn2binpad(e, @buf[offset], e_len);
     Inc(offset, e_len);
 
-    // 3. Écriture du module n
+    // Modulus n
     PInteger(@buf[offset])^ := htonl(n_len);
     Inc(offset, SizeOf(Integer));
     BN_bn2binpad(n, @buf[offset], n_len);
     Inc(offset, n_len);
 
-    // Encodage en Base64 via OpenSSL BIO
+    // =========================================================
+    // 4. Encodage Base64 via chaîne BIO
+    //    BIO_get_mem_data sur bio_mem pour éviter une recopie.
+    // =========================================================
     bio_b64 := BIO_new(BIO_f_base64());
     bio_mem := BIO_new(BIO_s_mem());
+    if (bio_b64 = nil) or (bio_mem = nil) then Exit;
 
-    // Supprime les saut de ligne automatiques insérés par BIO_f_base64
     BIO_set_flags(bio_b64, BIO_FLAGS_BASE64_NO_NL);
-    BIO_push(bio_b64, bio_mem);
+    bioChain := BIO_push(bio_b64, bio_mem);
+    bio_b64  := nil;   // appartient à la chaîne
 
-    BIO_write(bio_b64, @buf[0], offset);
-    BIO_flush(bio_b64);
+    BIO_write(bioChain, @buf[0], offset);
+    BIO_flush(bioChain);
 
-    // Récupération directe du pointeur mémoire sans recopie intermédiaire
     b64_len := BIO_get_mem_data(bio_mem, @b64_ptr);
     if b64_len > 0 then
     begin
@@ -2632,9 +2688,18 @@ begin
       Result := True;
     end;
 
-    BIO_free_all(bio_b64);
+    BIO_free_all(bioChain);
+    bioChain := nil;
+    bio_mem  := nil;
+
   finally
-    EVP_PKEY_free(pubkey);
+    if n        <> nil then BN_free(n);
+    if e        <> nil then BN_free(e);
+    if pubkey   <> nil then EVP_PKEY_free(pubkey);
+    // gardes si Exit avant BIO_push
+    if bio_b64  <> nil then BIO_free(bio_b64);
+    if bio_mem  <> nil then BIO_free(bio_mem);
+    if bioChain <> nil then BIO_free_all(bioChain);
   end;
 end;
 

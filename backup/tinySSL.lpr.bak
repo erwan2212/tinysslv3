@@ -7,9 +7,6 @@ program tinySSL;
 {$mode objfpc}{$H+}
 {$APPTYPE CONSOLE}
 
-{$define OPENSSL_STATIC_LINK_MODEL}
-{$undef OPENSSL_NO_DEPRECATED_3_0}
-
 uses
   {$IFDEF UNIX}
   cthreads,

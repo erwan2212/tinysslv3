@@ -190,6 +190,7 @@ begin
   debug:= cmd.readString('debug')='true';
   utf16:= cmd.readString('utf16')='true';
 
+  {
   if cmd.existsProperty('s_client')=true then
      begin
      LoadSSL;
@@ -199,6 +200,7 @@ begin
      freessl;
      exit;
      end;
+  }
 
   if cmd.existsProperty('decrypt')=true then
   begin
