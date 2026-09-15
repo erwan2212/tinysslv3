@@ -804,94 +804,61 @@ begin
    end; //if FileExists ('tinyssl.ini') then
 end;
 
-{
 function add_ext(cert: PX509; nid: Integer; const Value: string;
-                 issuer: pX509 = nil): Boolean;
+  issuer: pX509 = nil): Boolean;
 var
-  ex      : PX509_EXTENSION = nil;
-  ctx     : array [0..127] of byte;
-  AnsiVal : AnsiString;
-  iss     : pX509;
-  conf    : pCONF;
+  ex: PX509_EXTENSION;
+  ctx: array [0..127] of Byte;
+  AnsiVal: AnsiString;
+  CleanVal: string;
+  IsCritical: Boolean;
+  iss: PX509;
 begin
   Result := False;
   log(Format('add_ext NID %d: %s', [nid, Value]));
   if cert = nil then Exit;
 
   if issuer <> nil then iss := issuer
-                   else iss := cert;
+  else iss := cert;
 
-  // Créer une CONF vide mais valide — permet à OpenSSL de résoudre
-  // tous les OID built-in dont extendedKeyUsage (clientAuth, serverAuth)
-  conf := NCONF_new(nil);
-
-  FillChar(ctx, SizeOf(ctx), 0);
-  X509V3_set_ctx(@ctx[0], nil, nil, nil, nil, $10);   // CTX_TEST
-  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
-  X509V3_set_nconf(@ctx[0], conf);                    // attacher la conf
-
-  AnsiVal := AnsiString(Value);
-  ex := X509V3_EXT_nconf_nid(conf, @ctx[0], nid, PAnsiChar(AnsiVal));
-  if ex = nil then
+  // 1. Gestion optionnelle du flag "critical," au début de la chaîne
+  IsCritical := False;
+  CleanVal := Trim(Value);
+  if Pos('critical,', LowerCase(CleanVal)) = 1 then
   begin
-    log(Format('Erreur add_ext NID %d : valeur "%s"', [nid, Value]));
-    NCONF_free(conf);
-    Exit;
+    IsCritical := True;
+    CleanVal := Trim(Copy(CleanVal, 10, MaxInt)); // Retire "critical,"
   end;
 
-  if X509_add_ext(cert, ex, -1) = 1 then
-    Result := True
-  else
-    log(Format('Erreur X509_add_ext NID %d', [nid]));
-
-  X509_EXTENSION_free(ex);
-  NCONF_free(conf);
-end;
-
-}
-
-function add_ext(cert: PX509; nid: Integer; const Value: string;
-                 issuer: pX509 = nil): Boolean;
-var
-  ex      : PX509_EXTENSION = nil;
-  ctx     : array [0..127] of byte;
-  AnsiVal : AnsiString;
-  iss     : pX509;
-  conf    : pCONF;
-
-
-begin
-  Result := False;
-  log(Format('add_ext NID %d: %s', [nid, Value]));
-  if cert = nil then Exit;
-
-  if issuer <> nil then iss := issuer
-                   else iss := cert;
-
-  conf := NCONF_new(nil);
-
   FillChar(ctx, SizeOf(ctx), 0);
-  X509V3_set_ctx(@ctx[0], nil, nil, nil, nil, $10);  // CTX_TEST
   X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
-  X509V3_set_nconf(@ctx[0], conf);                           // attacher conf au ctx
 
-  AnsiVal := AnsiString(Value);
-  ex := X509V3_EXT_nconf_nid(conf, @ctx[0], nid, PAnsiChar(AnsiVal));
-  if ex = nil then
+  AnsiVal := AnsiString(CleanVal);
+
+  // 2. Aiguillage intelligent selon le NID (contournement OpenSSL 3.x pour l'EKU)
+  if nid = NID_ext_key_usage then
+    ex := X509V3_EXT_conf(nil, @ctx[0], 'extendedKeyUsage', PAnsiChar(AnsiVal))
+  else
+    ex := X509V3_EXT_conf_nid(nil, @ctx[0], nid, PAnsiChar(AnsiVal));
+
+  if ex <> nil then
+  begin
+    if IsCritical then
+      X509_EXTENSION_set_critical(ex, 1);
+
+    if X509_add_ext(cert, ex, -1) = 1 then
+      Result := True
+    else
+      log(Format('Erreur X509_add_ext NID %d', [nid]));
+
+    X509_EXTENSION_free(ex);
+  end
+  else
   begin
     log(Format('Erreur add_ext NID %d : valeur "%s"', [nid, Value]));
-    NCONF_free(conf);
-    Exit;
   end;
-
-  if X509_add_ext(cert, ex, -1) = 1 then
-    Result := True
-  else
-    log(Format('Erreur X509_add_ext NID %d', [nid]));
-
-  X509_EXTENSION_free(ex);
-  NCONF_free(conf);
 end;
+
 
 // sign cert
 function do_X509_sign(cert:pX509; pkey:pEVP_PKEY;const md:pEVP_MD):integer;
@@ -949,7 +916,7 @@ begin
       if subjectKeyIdentifier <> nil then
       begin
         ASN1_OCTET_STRING_set(subjectKeyIdentifier, @digest[0], size);
-        log('X509_add1_ext_i2d');
+        //log('X509_add1_ext_i2d');
         X509_add1_ext_i2d(x509_cert, NID_subject_key_identifier, subjectKeyIdentifier, 0, X509V3_ADD_DEFAULT);
         ASN1_OCTET_STRING_free(subjectKeyIdentifier);
         Result := True;
@@ -974,6 +941,9 @@ var
   days      : Int64       = 365 * 24 * 3600;  // 1 an en secondes
   value     : string;
   ret       : integer;
+  //
+  crit: Boolean = False;
+  cleanVal: string ;
 begin
   log('signreq');
   log('filename:' + filename);
@@ -1071,6 +1041,20 @@ begin
     value := ini_readstring('req_ext', 'ext_key_usage');
     if value <> '' then
       add_ext(x509_cert, NID_ext_key_usage, value, x509_ca);
+    {
+    if value <> '' then
+    begin
+      // On gère proprement la lecture du flag critical éventuel
+      cleanVal:= Trim(value);
+      if Pos('critical,', LowerCase(cleanVal)) = 1 then
+      begin
+        crit := True;
+        cleanVal := Trim(Copy(cleanVal, 10, MaxInt));
+      end;
+
+      add_ext_key_usage(x509_cert, cleanVal, crit);
+    end;
+    }
 
     // =========================================================
     // 6. Signature SHA-256
