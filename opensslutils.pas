@@ -1780,16 +1780,23 @@ end;
 
 procedure PrintFingerprint(cert: PX509);
 var
-md: array[0..EVP_MAX_MD_SIZE - 1] of Byte;
-md_len: Cardinal; i: Integer;
+  md1 : array[0..EVP_MAX_MD_SIZE - 1] of Byte;
+  md2 : array[0..EVP_MAX_MD_SIZE - 1] of Byte;
+  len1, len2: Cardinal;
+  i: Integer;
 begin
-        if X509_digest(cert, EVP_sha1(), @md, @md_len) = 0 then
-        begin
-        WriteLn('Error computing fingerprint');
-        Exit;
-        end;
-        Write('Fingerprint (SHA-1): ');
-        for i := 0 to md_len - 1 do Write(IntToHex(md[i], 2)); WriteLn;
+  if X509_digest(cert, EVP_sha1(), @md1, @len1) = 1 then
+  begin
+    Write('Fingerprint (SHA-1):   ');
+    for i := 0 to len1 - 1 do Write(IntToHex(md1[i], 2));
+    WriteLn;
+  end;
+  if X509_digest(cert, EVP_sha256(), @md2, @len2) = 1 then
+  begin
+    Write('Fingerprint (SHA-256): ');
+    for i := 0 to len2 - 1 do Write(IntToHex(md2[i], 2));
+    WriteLn;
+  end;
 end;
 
 function print_req(filename:string):boolean;
@@ -2292,7 +2299,7 @@ begin
         ret := PEM_write_bio_PrivateKey(
           bp,
           pkey,
-          EVP_des_ede3_cbc(),
+          EVP_aes_256_cbc(),
           PByte(PAnsiChar(passAnsi)), // Transtypage en PByte requis par l'API
           Length(passAnsi),
           nil,
