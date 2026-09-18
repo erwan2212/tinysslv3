@@ -15,6 +15,7 @@ uses
   // Cryptographie, clés et PKCS#7
   openssl_evp,       // Pour EVP_PKEY_*, EVP_sha256...
   openssl_rsa,
+  openssl_ec,
   openssl_pkcs7,     // Pour pPKCS7, PKCS7_sign, PKCS7_free...
   openssl_pkcs12,
   openssl_x509,      // Pour X509_*, X509_NAME_*, pSTACK_OFX509...
@@ -34,7 +35,7 @@ function LoadSSL: Boolean;
 procedure FreeSSL;
 //function generate_rsa_key:boolean;
 function generate_rsa_key_2:boolean;
-function mkcert(filename:string;cn:string;privatekey:string='';read_password:string='';serial:string='';ca:boolean=false):boolean;
+function mkcert(filename:string;cn:string;privatekey:string='';read_password:string='';serial:string='';ca:boolean=false;algo:string=''):boolean;
 function mkreq(cn:string;keyfile,csrfile:string):boolean;
 function signreq(filename:string;cert:string;read_password:string='';alt:string='';ca:boolean=false):boolean;
 //function selfsign(filename:string;subject:string):boolean;
@@ -804,112 +805,6 @@ begin
    end; //if FileExists ('tinyssl.ini') then
 end;
 
-{
-function add_ext(cert: PX509; nid: Integer; const Value: string;
-                 issuer: pX509 = nil): Boolean;
-var
-  ex      : PX509_EXTENSION = nil;
-  ctx     : array [0..127] of byte;
-  AnsiVal : AnsiString;
-  iss     : pX509;
-  conf    : pCONF;
-begin
-  Result := False;
-  log(Format('add_ext NID %d: %s', [nid, Value]));
-  if cert = nil then Exit;
-
-  if issuer <> nil then iss := issuer
-                   else iss := cert;
-
-  // Créer une CONF vide mais valide — permet à OpenSSL de résoudre
-  // tous les OID built-in dont extendedKeyUsage (clientAuth, serverAuth)
-  conf := NCONF_new(nil);
-
-  FillChar(ctx, SizeOf(ctx), 0);
-  X509V3_set_ctx(@ctx[0], nil, nil, nil, nil, $10);   // CTX_TEST
-  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
-  X509V3_set_nconf(@ctx[0], conf);                    // attacher la conf
-
-  AnsiVal := AnsiString(Value);
-  ex := X509V3_EXT_nconf_nid(conf, @ctx[0], nid, PAnsiChar(AnsiVal));
-  if ex = nil then
-  begin
-    log(Format('Erreur add_ext NID %d : valeur "%s"', [nid, Value]));
-    NCONF_free(conf);
-    Exit;
-  end;
-
-  if X509_add_ext(cert, ex, -1) = 1 then
-    Result := True
-  else
-    log(Format('Erreur X509_add_ext NID %d', [nid]));
-
-  X509_EXTENSION_free(ex);
-  NCONF_free(conf);
-end;
-
-}
-
-{
-function add_ext(cert: PX509; nid: Integer; const Value: string;
-  issuer: pX509 = nil): Boolean;
-var
-  ex: PX509_EXTENSION;
-  ctx: array [0..127] of Byte;
-  AnsiVal: AnsiString;
-  CleanVal: string;
-  IsCritical: Boolean;
-  iss: PX509;
-begin
-  Result := False;
-  log(Format('add_ext NID %d: %s', [nid, Value]));
-  if cert = nil then Exit;
-
-  if issuer <> nil then iss := issuer
-  else iss := cert;
-
-  // 1. Gestion optionnelle du flag "critical," au début de la chaîne
-  IsCritical := False;
-  CleanVal := Trim(Value);
-  if Pos('critical,', LowerCase(CleanVal)) = 1 then
-  begin
-    IsCritical := True;
-    CleanVal := Trim(Copy(CleanVal, 10, MaxInt));
-  end;
-
-  FillChar(ctx, SizeOf(ctx), 0);
-  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
-
-  AnsiVal := AnsiString(CleanVal);
-
-  // 2. Appel natif compatible (nil en premier paramètre, tampon structuré au second)
-  ex := X509V3_EXT_conf_nid(nil, @ctx[0], nid, PAnsiChar(AnsiVal));
-  if ex <> nil then
-  begin
-    if IsCritical then
-      X509_EXTENSION_set_critical(ex, 1);
-
-    if X509_add_ext(cert, ex, -1) = 1 then
-      Result := True
-    else
-      log(Format('Erreur X509_add_ext NID %d', [nid]));
-
-    X509_EXTENSION_free(ex);
-  end
-  else
-  begin
-    log(Format('Erreur add_ext NID %d : valeur "%s"', [nid, Value]));
-  end;
-end;
-
-// Procédure de callback compatible avec la signature de la pile OpenSSL
-procedure FreeASN1ObjectCallback(obj: Pointer); cdecl;
-begin
-  if obj <> nil then
-    ASN1_OBJECT_free(PASN1_OBJECT(obj));
-end;
-}
-
 function add_ext(cert: PX509; nid: Integer; const Value: string;
   issuer: pX509 = nil): Boolean;
 var
@@ -965,44 +860,6 @@ begin
   end;
 end;
 
-function add_ext_key_usage(cert: PX509; const Value: string; IsCritical: Boolean; issuer: PX509 = nil): Boolean;
-var
-  ex: PX509_EXTENSION;
-  ctx: array [0..127] of Byte;
-  AnsiVal: AnsiString;
-  iss: PX509;
-begin
-  Result := False;
-  log('add_ext_key_usage: ' + Value);
-  if cert = nil then Exit;
-
-  if issuer <> nil then iss := issuer
-  else iss := cert;
-
-  FillChar(ctx, SizeOf(ctx), 0);
-  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
-
-  AnsiVal := AnsiString(Value);
-
-  // Utilisation de X509V3_EXT_conf avec le nom textuel de l'extension
-  ex := X509V3_EXT_conf(nil, @ctx[0], 'extendedKeyUsage', PAnsiChar(AnsiVal));
-  if ex <> nil then
-  begin
-    if IsCritical then
-      X509_EXTENSION_set_critical(ex, 1);
-
-    if X509_add_ext(cert, ex, -1) = 1 then
-      Result := True
-    else
-      log('Erreur X509_add_ext pour EKU', 1);
-
-    X509_EXTENSION_free(ex);
-  end
-  else
-  begin
-    log('Erreur X509V3_EXT_conf pour EKU : ' + Value, 1);
-  end;
-end;
 
 // sign cert
 function do_X509_sign(cert:pX509; pkey:pEVP_PKEY;const md:pEVP_MD):integer;
@@ -1277,7 +1134,7 @@ These certificates are mainly used on the Windows platform.
 
 function mkcert(filename: string; cn: string; privatekey: string = '';
                 read_password: string = ''; serial: string = '';
-                ca: boolean = false): boolean;
+                ca: boolean = false;algo:string=''): boolean;
 var
   pkey     : PEVP_PKEY     = nil;
   x509     : pX509          = nil;
@@ -1291,9 +1148,17 @@ var
   p        : pBIGNUM        = nil;
   value    : string;
   keyPath, certPath : string;
+  sAlgo    : string;
+  CurveNID : integer;
 begin
   result := false;
-  log('mkcert (OpenSSL 3.0)');
+
+  { Détermination de l'algorithme par défaut si vide }
+    sAlgo := Trim(algo);
+    if sAlgo = '' then
+      sAlgo := 'RSA';
+
+    log('mkcert (OpenSSL 3.0) - Algo: ' + sAlgo);
 
   { ---- Construction des chemins ------------------------------------------ }
   certPath := filename;
@@ -1307,21 +1172,34 @@ begin
       ========================================================= }
     if privatekey = '' then
     begin
-      log('EVP_PKEY_generate RSA-2048 (OpenSSL 3.0)');
+      log('EVP_PKEY_generate ' + sAlgo + ' (OpenSSL 3.0)');
 
       { Créer le contexte de génération par nom d'algorithme.
         On passe nil pour libctx (contexte de bibliothèque par défaut)
         et nil pour propquery (pas de contrainte de propriété). }
-      kctx := EVP_PKEY_CTX_new_from_name(nil, 'RSA', nil);
+      kctx := EVP_PKEY_CTX_new_from_name(nil, PAnsiChar(AnsiString(sAlgo)), nil);
       if kctx = nil then Exit;
 
       try
         { Initialiser l'opération keygen }
         if EVP_PKEY_keygen_init(kctx) <> 1 then Exit;
 
-        { Paramétrer la taille de clé (2048 bits).
-          EVP_PKEY_CTX_set_rsa_keygen_bits est déclarée dans openssl_rsa. }
-        if EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) <= 0 then Exit;
+        { Configuration spécifique selon l'algorithme choisi }
+        if AnsiUpperCase(sAlgo) = 'RSA' then
+        begin
+          { Paramétrer la taille de clé RSA (ex: 2048 bits) }
+          if EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) <= 0 then Exit;
+        end
+        else if AnsiUpperCase(sAlgo) = 'EC' then
+        begin
+          { Paramétrer la courbe elliptique (par défaut prime256v1 / secp256r1) }
+          CurveNID := OBJ_sn2nid('prime256v1');
+          if EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, CurveNID) <= 0 then Exit;
+        end
+        else if AnsiUpperCase(sAlgo) = 'ED25519' then
+        begin
+          { Ed25519 ne requiert pas de paramètre de taille ou de courbe supplémentaire }
+        end;
 
         { OpenSSL 3.0 utilise 65537 (F4) comme exposant public par défaut ;
           aucun appel supplémentaire n'est nécessaire pour l'imposer.
@@ -1924,16 +1802,23 @@ end;
 
 procedure PrintFingerprint(cert: PX509);
 var
-md: array[0..EVP_MAX_MD_SIZE - 1] of Byte;
-md_len: Cardinal; i: Integer;
+  md1 : array[0..EVP_MAX_MD_SIZE - 1] of Byte;
+  md2 : array[0..EVP_MAX_MD_SIZE - 1] of Byte;
+  len1, len2: Cardinal;
+  i: Integer;
 begin
-        if X509_digest(cert, EVP_sha1(), @md, @md_len) = 0 then
-        begin
-        WriteLn('Error computing fingerprint');
-        Exit;
-        end;
-        Write('Fingerprint (SHA-1): ');
-        for i := 0 to md_len - 1 do Write(IntToHex(md[i], 2)); WriteLn;
+  if X509_digest(cert, EVP_sha1(), @md1, @len1) = 1 then
+  begin
+    Write('Fingerprint (SHA-1):   ');
+    for i := 0 to len1 - 1 do Write(IntToHex(md1[i], 2));
+    WriteLn;
+  end;
+  if X509_digest(cert, EVP_sha256(), @md2, @len2) = 1 then
+  begin
+    Write('Fingerprint (SHA-256): ');
+    for i := 0 to len2 - 1 do Write(IntToHex(md2[i], 2));
+    WriteLn;
+  end;
 end;
 
 function print_req(filename:string):boolean;
@@ -2436,7 +2321,7 @@ begin
         ret := PEM_write_bio_PrivateKey(
           bp,
           pkey,
-          EVP_des_ede3_cbc(),
+          EVP_aes_256_cbc(),
           PByte(PAnsiChar(passAnsi)), // Transtypage en PByte requis par l'API
           Length(passAnsi),
           nil,

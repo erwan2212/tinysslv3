@@ -153,7 +153,7 @@ begin
   cmd.declareflag('encrypt_pub', 'encrypt a file using public.pem, read from filename');
   cmd.declareflag('decrypt_priv', 'decrypt a file using private.pem, read from filename');
 
-  cmd.declareflag('mkcert', 'make a self sign root cert, read from privatekey (option) & write to filename.crt and filename.key');
+  cmd.declareflag('mkcert', 'make a self sign root cert, read from privatekey (option) & write to filename.crt and filename.key, useds algo=EC:EC384:EC521:ED25519:RSA (default)');
   cmd.declareflag('mkreq', 'make a certificate service request, read from privatekey & write to filename.csr filename.key (if privatekey not specified)');
   cmd.declareflag('signreq', 'make a certificate from a csr, read from filename and cert, write to filename.crt');
   //cmd.declareflag('selfsign', 'make a self sign cert, write to cert.crt cert.key');
@@ -453,6 +453,8 @@ begin
     //out
     filename:=cmd.readString('filename');
     if filename='' then filename:='ca.crt';
+    algo:=cmd.readString('algo') ;
+    if algo='' then algo:='RSA';
     //in
     privatekey:=cmd.readString('privatekey') ;
     password:=cmd.readString('password') ;
@@ -460,7 +462,7 @@ begin
     if cn='' then cn:='_Root Authority_';
     ca:=cmd.readString('ca')='true';
     //
-    if mkcert(filename,cn,privatekey,password,'',ca)=true then writeln('ok') else writeln('not ok');
+    if mkcert(filename,cn,privatekey,password,'',ca,algo)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;

@@ -15,6 +15,7 @@ uses
   // Cryptographie, clés et PKCS#7
   openssl_evp,       // Pour EVP_PKEY_*, EVP_sha256...
   openssl_rsa,
+  openssl_ec,
   openssl_pkcs7,     // Pour pPKCS7, PKCS7_sign, PKCS7_free...
   openssl_pkcs12,
   openssl_x509,      // Pour X509_*, X509_NAME_*, pSTACK_OFX509...
@@ -34,7 +35,7 @@ function LoadSSL: Boolean;
 procedure FreeSSL;
 //function generate_rsa_key:boolean;
 function generate_rsa_key_2:boolean;
-function mkcert(filename:string;cn:string;privatekey:string='';read_password:string='';serial:string='';ca:boolean=false):boolean;
+function mkcert(filename:string;cn:string;privatekey:string='';read_password:string='';serial:string='';ca:boolean=false;algo:string=''):boolean;
 function mkreq(cn:string;keyfile,csrfile:string):boolean;
 function signreq(filename:string;cert:string;read_password:string='';alt:string='';ca:boolean=false):boolean;
 //function selfsign(filename:string;subject:string):boolean;
@@ -1133,7 +1134,7 @@ These certificates are mainly used on the Windows platform.
 
 function mkcert(filename: string; cn: string; privatekey: string = '';
                 read_password: string = ''; serial: string = '';
-                ca: boolean = false): boolean;
+                ca: boolean = false;algo:string=''): boolean;
 var
   pkey     : PEVP_PKEY     = nil;
   x509     : pX509          = nil;
@@ -1147,9 +1148,17 @@ var
   p        : pBIGNUM        = nil;
   value    : string;
   keyPath, certPath : string;
+  sAlgo    : string;
+  CurveNID : integer;
 begin
   result := false;
-  log('mkcert (OpenSSL 3.0)');
+
+  { Détermination de l'algorithme par défaut si vide }
+    sAlgo := Trim(algo);
+    if sAlgo = '' then
+      sAlgo := 'RSA';
+
+    log('mkcert (OpenSSL 3.0) - Algo: ' + sAlgo);
 
   { ---- Construction des chemins ------------------------------------------ }
   certPath := filename;
@@ -1163,21 +1172,48 @@ begin
       ========================================================= }
     if privatekey = '' then
     begin
-      log('EVP_PKEY_generate RSA-2048 (OpenSSL 3.0)');
+      log('EVP_PKEY_generate ' + sAlgo + ' (OpenSSL 3.0)');
 
       { Créer le contexte de génération par nom d'algorithme.
         On passe nil pour libctx (contexte de bibliothèque par défaut)
         et nil pour propquery (pas de contrainte de propriété). }
-      kctx := EVP_PKEY_CTX_new_from_name(nil, 'RSA', nil);
+      kctx := EVP_PKEY_CTX_new_from_name(nil, PAnsiChar(AnsiString(sAlgo)), nil);
       if kctx = nil then Exit;
 
       try
         { Initialiser l'opération keygen }
         if EVP_PKEY_keygen_init(kctx) <> 1 then Exit;
 
-        { Paramétrer la taille de clé (2048 bits).
-          EVP_PKEY_CTX_set_rsa_keygen_bits est déclarée dans openssl_rsa. }
-        if EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) <= 0 then Exit;
+        { Configuration spécifique selon l'algorithme choisi }
+          if AnsiUpperCase(sAlgo) = 'RSA' then
+          begin
+            { Paramétrer la taille de clé RSA (ex: 2048 bits) }
+            if EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) <= 0 then Exit;
+          end
+          else if AnsiUpperCase(sAlgo) = 'EC' then
+          begin
+            { Courbe P-256 (prime256v1 / secp256r1) par défaut }
+            CurveNID := OBJ_sn2nid('prime256v1');
+            if EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, CurveNID) <= 0 then Exit;
+          end
+          else if AnsiUpperCase(sAlgo) = 'EC384' then
+          begin
+            { Le nom technique de l'algo pour OpenSSL reste 'EC' }
+            sAlgo := 'EC';
+            CurveNID := OBJ_sn2nid('secp384r1');
+            if EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, CurveNID) <= 0 then Exit;
+          end
+          else if AnsiUpperCase(sAlgo) = 'EC521' then
+          begin
+            { Le nom technique de l'algo pour OpenSSL reste 'EC' }
+            sAlgo := 'EC';
+            CurveNID := OBJ_sn2nid('secp521r1');
+            if EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, CurveNID) <= 0 then Exit;
+          end
+          else if AnsiUpperCase(sAlgo) = 'ED25519' then
+          begin
+            { Ed25519 ne requiert pas de paramètre de taille ou de courbe supplémentaire }
+          end;
 
         { OpenSSL 3.0 utilise 65537 (F4) comme exposant public par défaut ;
           aucun appel supplémentaire n'est nécessaire pour l'imposer.
