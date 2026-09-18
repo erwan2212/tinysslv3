@@ -1,6 +1,6 @@
 # TinySSL
 
-New tinyssl but using libcrypto 3.x using https://github.com/MWASoftware/PascalAPI4OpenSSL/tree/main</br>
+New tinyssl but using libcrypto 3.x and https://github.com/MWASoftware/PascalAPI4OpenSSL/tree/main</br>
 
 <br/>
 TinySSL, aka playing with openssl library (libeay32) for digest, cipher and certificate matters.<br/>
