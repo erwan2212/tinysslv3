@@ -2655,20 +2655,22 @@ const
   OSSL_PKEY_PARAM_RSA_N = 'n';
   OSSL_PKEY_PARAM_RSA_E = 'e';
 var
-  pubkey      : PEVP_PKEY = nil;
-  n           : PBIGNUM   = nil;
-  e           : PBIGNUM   = nil;
-  n_len, e_len: Integer;
-  key_type    : PAnsiChar;
-  key_type_len: Integer;
-  buf         : TBytes;
-  offset      : Integer;
-  bio_mem     : PBIO      = nil;
-  bio_b64     : PBIO      = nil;
-  bioChain    : PBIO      = nil;
-  b64_ptr     : PAnsiChar;
-  b64_len     : LongInt;
-  b64_str     : string;
+  pubkey       : PEVP_PKEY = nil;
+  n            : PBIGNUM   = nil;
+  e            : PBIGNUM   = nil;
+  n_len, e_len : Integer;
+  n_bin_len, e_bin_len: Integer;
+  n_bytes, e_bytes    : TBytes;
+  key_type     : PAnsiChar;
+  key_type_len : Integer;
+  buf          : TBytes;
+  offset       : Integer;
+  bio_mem      : PBIO      = nil;
+  bio_b64      : PBIO      = nil;
+  bioChain     : PBIO      = nil;
+  b64_ptr      : PAnsiChar;
+  b64_len      : LongInt;
+  b64_str      : string;
 begin
   Result := False;
 
@@ -2682,8 +2684,6 @@ begin
   try
     // =========================================================
     // 1. Récupération de n et e via EVP_PKEY_get_bn_param
-    //    Remplace : EVP_PKEY_get0_RSA + RSA_get0_key (dépréciés 3.0)
-    //    EVP_PKEY_get_bn_param alloue le BIGNUM si *bn = nil.
     // =========================================================
     if EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_RSA_N, @n) <> 1 then
     begin
@@ -2698,16 +2698,26 @@ begin
     end;
 
     // =========================================================
-    // 2. Calcul des longueurs avec padding MSB (format OpenSSH)
-    //    Si le bit de poids fort est à 1, OpenSSH exige un octet
-    //    0x00 préfixé pour signifier un entier positif (big-endian
-    //    signé). BN_bn2binpad gère le remplissage à gauche.
+    // 2. Calcul des longueurs et gestion du padding MSB (format SSH mpint)
+    //    On vérifie directement le premier octet de la représentation binaire.
     // =========================================================
-    n_len := BN_num_bytes((n));
-    e_len := BN_num_bytes((e));
+    n_bin_len := BN_num_bytes(n);
+    SetLength(n_bytes, n_bin_len);
+    BN_bn2bin(n, @n_bytes[0]);
 
-    if BN_is_bit_set(n, (n_len * 8) - 1) <> 0 then Inc(n_len);
-    if BN_is_bit_set(e, (e_len * 8) - 1) <> 0 then Inc(e_len);
+    if (n_bin_len > 0) and ((n_bytes[0] and $80) <> 0) then
+      n_len := n_bin_len + 1
+    else
+      n_len := n_bin_len;
+
+    e_bin_len := BN_num_bytes(e);
+    SetLength(e_bytes, e_bin_len);
+    BN_bn2bin(e, @e_bytes[0]);
+
+    if (e_bin_len > 0) and ((e_bytes[0] and $80) <> 0) then
+      e_len := e_bin_len + 1
+    else
+      e_len := e_bin_len;
 
     key_type     := 'ssh-rsa';
     key_type_len := Length(key_type);
@@ -2724,10 +2734,11 @@ begin
     // Type de clé
     PInteger(@buf[offset])^ := htonl(key_type_len);
     Inc(offset, SizeOf(Integer));
-    Move(key_type[1], buf[offset], key_type_len);
+    //Move(key_type[1], buf[offset], key_type_len);
+    Move(key_type[0], buf[offset], key_type_len);
     Inc(offset, key_type_len);
 
-    // Exposant e
+    // Exposant e (BN_bn2binpad gère automatiquement le préfixe 0x00 si e_len > e_bin_len)
     PInteger(@buf[offset])^ := htonl(e_len);
     Inc(offset, SizeOf(Integer));
     BN_bn2binpad(e, @buf[offset], e_len);
@@ -2741,7 +2752,6 @@ begin
 
     // =========================================================
     // 4. Encodage Base64 via chaîne BIO
-    //    BIO_get_mem_data sur bio_mem pour éviter une recopie.
     // =========================================================
     bio_b64 := BIO_new(BIO_f_base64());
     bio_mem := BIO_new(BIO_s_mem());
@@ -2749,7 +2759,7 @@ begin
 
     BIO_set_flags(bio_b64, BIO_FLAGS_BASE64_NO_NL);
     bioChain := BIO_push(bio_b64, bio_mem);
-    bio_b64  := nil;   // appartient à la chaîne
+    bio_b64  := nil;   // Appartient désormais à la chaîne
 
     BIO_write(bioChain, @buf[0], offset);
     BIO_flush(bioChain);
@@ -2767,13 +2777,108 @@ begin
     bio_mem  := nil;
 
   finally
-    if n        <> nil then BN_free(n);
-    if e        <> nil then BN_free(e);
-    if pubkey   <> nil then EVP_PKEY_free(pubkey);
-    // gardes si Exit avant BIO_push
+    if n      <> nil then BN_free(n);
+    if e      <> nil then BN_free(e);
+    if pubkey <> nil then EVP_PKEY_free(pubkey);
+
+    // Gardes-fous si une sortie anticipée (Exit) survient avant la construction de la chaîne
     if bio_b64  <> nil then BIO_free(bio_b64);
     if bio_mem  <> nil then BIO_free(bio_mem);
     if bioChain <> nil then BIO_free_all(bioChain);
+  end;
+end;
+
+function PrintSSHECDSAKey(pubkey: PEVP_PKEY): Boolean;
+const
+  OSSL_PKEY_PARAM_PUB_KEY = 'pub';
+var
+  key_type, curve_name : PAnsiChar;
+  key_type_len, curve_name_len : Integer;
+  pub_key_bytes : TBytes;
+  pub_key_len   : TOpenSSL_C_SIZET; //Size_t;
+  buf           : TBytes;
+  offset        : Integer;
+  bio_mem       : PBIO      = nil;
+  bio_b64       : PBIO      = nil;
+  bioChain      : PBIO      = nil;
+  b64_ptr       : PAnsiChar;
+  b64_len       : LongInt;
+  b64_str       : string;
+begin
+  Result := False;
+
+  // 1. Récupération du point public brut (contient déjà 0x04 + X + Y)
+  pub_key_len := 0;
+  if EVP_PKEY_get_octet_string_param(pubkey, OSSL_PKEY_PARAM_PUB_KEY, nil, 0, @pub_key_len) <> 1 then
+  begin
+    WriteLn('Failed to get ECDSA public key length');
+    Exit;
+  end;
+
+  SetLength(pub_key_bytes, pub_key_len);
+  if EVP_PKEY_get_octet_string_param(pubkey, OSSL_PKEY_PARAM_PUB_KEY, @pub_key_bytes[0], pub_key_len, @pub_key_len) <> 1 then
+  begin
+    WriteLn('Failed to get ECDSA public key bytes');
+    Exit;
+  end;
+
+  key_type   := 'ecdsa-sha2-nistp256';
+  key_type_len := Length(key_type);
+
+  curve_name := 'nistp256'; // Nom standard attendu par SSH pour cette courbe
+  curve_name_len := Length(curve_name);
+
+  // 2. Construction du buffer binaire OpenSSH pour ECDSA :
+  // [4: len(type)][type][4: len(curve)][curve][4: len(Q)][Q]
+  SetLength(buf, SizeOf(Integer) + key_type_len +
+                 SizeOf(Integer) + curve_name_len +
+                 SizeOf(Integer) + pub_key_len);
+  offset := 0;
+
+  // Type de clé
+  PInteger(@buf[offset])^ := htonl(key_type_len);
+  Inc(offset, SizeOf(Integer));
+  Move(key_type[1], buf[offset], key_type_len);
+  Inc(offset, key_type_len);
+
+  // Nom de la courbe
+  PInteger(@buf[offset])^ := htonl(curve_name_len);
+  Inc(offset, SizeOf(Integer));
+  Move(curve_name[1], buf[offset], curve_name_len);
+  Inc(offset, curve_name_len);
+
+  // Point public Q
+  PInteger(@buf[offset])^ := htonl(pub_key_len);
+  Inc(offset, SizeOf(Integer));
+  Move(pub_key_bytes[0], buf[offset], pub_key_len);
+  Inc(offset, pub_key_len);
+
+  // 3. Encodage Base64 via chaîne BIO (similaire à RSA)
+  bio_b64 := BIO_new(BIO_f_base64());
+  bio_mem := BIO_new(BIO_s_mem());
+  if (bio_b64 = nil) or (bio_mem = nil) then Exit;
+
+  try
+    BIO_set_flags(bio_b64, BIO_FLAGS_BASE64_NO_NL);
+    bioChain := BIO_push(bio_b64, bio_mem);
+    bio_b64  := nil; // Appartient à la chaîne
+
+    BIO_write(bioChain, @buf[0], offset);
+    BIO_flush(bioChain);
+
+    b64_len := BIO_get_mem_data(bio_mem, @b64_ptr);
+    if b64_len > 0 then
+    begin
+      SetString(b64_str, b64_ptr, b64_len);
+      WriteLn(key_type, ' ', b64_str);
+      Result := True;
+    end;
+  finally
+    if bioChain <> nil then BIO_free_all(bioChain)
+    else begin
+      if bio_b64 <> nil then BIO_free(bio_b64);
+      if bio_mem <> nil then BIO_free(bio_mem);
+    end;
   end;
 end;
 

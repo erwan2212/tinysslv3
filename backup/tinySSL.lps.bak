@@ -44,8 +44,8 @@
       <Unit0>
         <Filename Value="tinySSL.lpr"/>
         <IsPartOfProject Value="True"/>
-        <TopLine Value="142"/>
-        <CursorPos Y="156"/>
+        <TopLine Value="157"/>
+        <CursorPos X="163" Y="156"/>
         <UsageCount Value="219"/>
         <Loaded Value="True"/>
       </Unit0>
@@ -59,8 +59,8 @@
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
         <EditorIndex Value="2"/>
-        <TopLine Value="1178"/>
-        <CursorPos Y="1188"/>
+        <TopLine Value="2755"/>
+        <CursorPos X="5" Y="2788"/>
         <UsageCount Value="219"/>
         <Loaded Value="True"/>
       </Unit2>
