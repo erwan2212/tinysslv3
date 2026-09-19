@@ -861,7 +861,8 @@ begin
   end;
 
   FillChar(ctx, SizeOf(ctx), 0);
-  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
+  X509V3_set_ctx(@ctx[0], nil, nil, nil, nil, $10);  // CTX_TEST = initialisation
+  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);   // liaison issuer/subject
 
   AnsiVal := AnsiString(CleanVal);
 
@@ -1174,7 +1175,7 @@ var
   kctx     : PEVP_PKEY_CTX = nil;   { contexte de génération de clé }
   ret      : integer;
   days_in_seconds : Int64;
-  iserial  : integer = 1;
+  iserial  : integer ;
   asn1     : pASN1_INTEGER = nil;
   p        : pBIGNUM        = nil;
   value    : string;
@@ -1285,6 +1286,7 @@ begin
     ========================================================= }
       if serial = '' then
       begin
+        iserial := Random($7FFFFFFF);
         ASN1_INTEGER_set(X509_get_serialNumber(x509), iserial);
       end
       else
@@ -1884,8 +1886,8 @@ var
   req: pX509_REQ;
   name: pX509_NAME;
   key: pEVP_PKEY;
-  bio_mem, bio_base64: pBIO;
-  data: array [0..4095] of char;
+  bio_mem, bio_base64, bioChain: pBIO;
+  pemData: AnsiString;
   key_buf, key_buf_orig, pb: pbyte;
   digest: array [0..EVP_MAX_MD_SIZE - 1] of byte;
   key_len, size: cardinal;
@@ -1898,6 +1900,7 @@ begin
   key := nil;
   bio_mem := nil;
   bio_base64 := nil;
+  bioChain := nil;
   key_buf := nil;
   key_buf_orig := nil;
 
@@ -1940,27 +1943,30 @@ begin
       Exit;
     end;
 
-    // On pousse bio_mem dans bio_base64 (ou l'inverse selon votre configuration de chaînage)
-    // Ici on respecte votre logique de chaînage
-    BIO_push(bio_base64, bio_mem);
+    bioChain := BIO_push(bio_base64, bio_mem);
+    bio_base64 := nil; // appartient maintenant à la chaîne bioChain
 
-    PEM_write_bio_PUBKEY(bio_base64, key);
-    BIO_flush(bio_base64);
+    PEM_write_bio_PUBKEY(bioChain, key);
+    BIO_flush(bioChain);
 
-    //b64len := BIO_read(bio_base64, @data[0], sizeof(data) - 1);
-    b64len := BIO_read(bio_mem, @data[0], sizeof(data)-1);  // ← doit être bio_mem
-    writeln();
-
+    // Lecture dynamique via BIO_pending sur bio_mem
+    b64len := BIO_pending(bio_mem);
     if b64len > 0 then
     begin
-      data[b64len] := #0;
+      SetLength(pemData, b64len);
+      BIO_read(bio_mem, @pemData[1], b64len);
+      writeln();
       writeln('Public key base64:');
-      writeln(data);
+      writeln(string(pemData));
     end
     else
     begin
       writeln('Erreur lors de la lecture de la clé en base64');
     end;
+
+    BIO_free_all(bioChain);
+    bioChain := nil;
+    bio_mem := nil;
 
     // Extraction de la clé au format DER (i2d_PUBKEY modifie le pointeur passé en paramètre)
     key_len := i2d_PUBKEY(key, nil);
@@ -1990,14 +1996,16 @@ begin
     Result := True;
 
   finally
-    // Nettoyage rigoureux des ressources allouées (ordre inverse ou sécurisé)
+    // Nettoyage rigoureux des ressources allouées
     if key_buf_orig <> nil then
       FreeMem(key_buf_orig);
 
     if bio_base64 <> nil then
-      BIO_free_all(bio_base64) // Libère la chaîne BIO complète (inclut bio_mem)
-    else if bio_mem <> nil then
+      BIO_free(bio_base64);
+    if bio_mem <> nil then
       BIO_free(bio_mem);
+    if bioChain <> nil then
+      BIO_free_all(bioChain);
 
     if key <> nil then
       EVP_PKEY_free(key);
@@ -2548,7 +2556,7 @@ var
   cipher: PEVP_CIPHER;
   buffer: array of byte;
   buffer_len: cardinal;
-  i: byte;
+  i: cardinal;
   ret, remain: integer;
   key, iv, encrypted: array of byte;
 begin
@@ -2714,7 +2722,8 @@ begin
    //EVP_DigestInit(context,md);
    EVP_DigestInit_ex(context, md, nil);
    EVP_DigestUpdate(context, @input[0], length(input));
-   EVP_DigestFinal(context, @digest[0], @digest_len);
+   //EVP_DigestFinal(context, @digest[0], @digest_len);
+   EVP_DigestFinal_ex(context, @digest[0], @digest_len);
    //
    EVP_MD_free(md);
    EVP_MD_CTX_destroy (context);

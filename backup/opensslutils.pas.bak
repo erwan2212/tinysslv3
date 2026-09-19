@@ -861,7 +861,8 @@ begin
   end;
 
   FillChar(ctx, SizeOf(ctx), 0);
-  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);
+  X509V3_set_ctx(@ctx[0], nil, nil, nil, nil, $10);  // CTX_TEST = initialisation
+  X509V3_set_ctx(@ctx[0], iss, cert, nil, nil, 0);   // liaison issuer/subject
 
   AnsiVal := AnsiString(CleanVal);
 
@@ -1174,7 +1175,7 @@ var
   kctx     : PEVP_PKEY_CTX = nil;   { contexte de génération de clé }
   ret      : integer;
   days_in_seconds : Int64;
-  iserial  : integer = 1;
+  iserial  : integer ;
   asn1     : pASN1_INTEGER = nil;
   p        : pBIGNUM        = nil;
   value    : string;
@@ -1285,6 +1286,7 @@ begin
     ========================================================= }
       if serial = '' then
       begin
+        iserial := Random($7FFFFFFF);
         ASN1_INTEGER_set(X509_get_serialNumber(x509), iserial);
       end
       else
@@ -1943,7 +1945,7 @@ begin
     // On pousse bio_mem dans bio_base64 (ou l'inverse selon votre configuration de chaînage)
     // Ici on respecte votre logique de chaînage
     BIO_push(bio_base64, bio_mem);
-
+    bio_mem := nil; // appartient maintenant à la chaîne bio_base64
     PEM_write_bio_PUBKEY(bio_base64, key);
     BIO_flush(bio_base64);
 
@@ -2013,58 +2015,47 @@ end;
 //openssl rsa -noout -text -in ca.key
 function print_private(filename: string; password: string = ''): boolean;
 const
-  // Constante OpenSSL 3.0 pour le paramètre "modulus" d'une clé RSA.
-  // Définie dans openssl/rsa.h : #define OSSL_PKEY_PARAM_RSA_N "n"
   OSSL_PKEY_PARAM_RSA_N = 'n';
 
 var
-  pkey        : PEVP_PKEY  = nil;
-  // clé publique DER
-  key_buf     : PByte      = nil;
-  key_buf_orig: PByte      = nil;   // garde le pointeur d'origine pour FreeMem
-  key_len     : integer;
-  // modulus RSA via EVP_PKEY_get_bn_param
-  modulus     : PBIGNUM    = nil;
-  bin         : PByte      = nil;
-  binLen      : integer;
-  // digest
-  digest      : array [0..EVP_MAX_MD_SIZE - 1] of byte;
-  dsize       : TOpenSSL_C_UINT;
-  // affichage PEM clé publique
-  bio_mem     : pBIO       = nil;
-  bio_base64  : pBIO       = nil;
-  bioChain    : pBIO       = nil;
-  pemData     : AnsiString;
-  pemLen      : integer;
-  // boucles
-  i           : integer;
-  hexMod      : PAnsiChar;
+  pkey         : PEVP_PKEY  = nil;
+  key_buf      : PByte      = nil;
+  key_buf_orig : PByte      = nil;
+  key_len      : integer;
+  modulus      : PBIGNUM    = nil;
+  bin          : PByte      = nil;
+  binLen       : integer;
+  digest       : array [0..EVP_MAX_MD_SIZE - 1] of byte;
+  dsize        : TOpenSSL_C_UINT;
+  bio_mem      : pBIO       = nil;
+  bio_base64   : pBIO       = nil;
+  bioChain     : pBIO       = nil;
+  pemData      : AnsiString;
+  pemLen       : integer;
+  i            : integer;
+  hexMod       : PAnsiChar;
 begin
   result := false;
 
-  // =========================================================
   // 1. Chargement de la clé privée
-  // =========================================================
   pkey := LoadPrivateKey(filename, password);
   if pkey = nil then Exit;
 
   try
     // =========================================================
-    // 2. Affichage de la clé publique en PEM (Base64)
-    //    BIO_read depuis bio_mem (pas depuis le filtre b64)
-    //    pour obtenir le PEM déjà formaté par OpenSSL.
+    // 2. Affichage de la clé PRIVÉE en PEM (Base64)
     // =========================================================
     bio_mem    := BIO_new(BIO_s_mem());
     bio_base64 := BIO_new(BIO_f_base64());
     if (bio_mem = nil) or (bio_base64 = nil) then Exit;
 
     bioChain := BIO_push(bio_base64, bio_mem);
-    bio_base64 := nil;   // appartient à la chaîne
+    bio_base64 := nil;
 
-    PEM_write_bio_PUBKEY(bioChain, pkey);
+    // Écriture de la clé privée (non chiffrée en sortie par les paramètres nil, nil, 0)
+    PEM_write_bio_PrivateKey(bioChain, pkey, nil, nil, 0, nil, nil);
     BIO_flush(bioChain);
 
-    // Lire depuis bio_mem (l'extrémité mémoire de la chaîne)
     pemLen := BIO_pending(bio_mem);
     SetLength(pemData, pemLen);
     BIO_read(bio_mem, @pemData[1], pemLen);
@@ -2074,21 +2065,42 @@ begin
     bio_mem   := nil;
 
     WriteLn;
+    WriteLn('Private key base64:');
+    WriteLn(string(pemData));
+
+    // =========================================================
+    // 3. Affichage de la clé PUBLIQUE en PEM (Base64)
+    // =========================================================
+    bio_mem    := BIO_new(BIO_s_mem());
+    bio_base64 := BIO_new(BIO_f_base64());
+    if (bio_mem = nil) or (bio_base64 = nil) then Exit;
+
+    bioChain := BIO_push(bio_base64, bio_mem);
+    bio_base64 := nil;
+
+    PEM_write_bio_PUBKEY(bioChain, pkey);
+    BIO_flush(bioChain);
+
+    pemLen := BIO_pending(bio_mem);
+    SetLength(pemData, pemLen);
+    BIO_read(bio_mem, @pemData[1], pemLen);
+
+    BIO_free_all(bioChain);
+    bioChain  := nil;
+    bio_mem   := nil;
+
     WriteLn('Public key base64:');
     WriteLn(string(pemData));
 
     // =========================================================
-    // 3. Clé publique en DER puis hex
-    //    i2d_PUBKEY avec out=nil donne la taille, puis alloue.
-    //    ATTENTION : i2d_PUBKEY avance le pointeur — on garde
-    //    une copie de l'adresse d'origine pour FreeMem.
+    // 4. Clé publique en DER puis hex
     // =========================================================
     key_len := i2d_PUBKEY(pkey, nil);
     if key_len <= 0 then Exit;
 
     GetMem(key_buf, key_len);
     key_buf_orig := key_buf;
-    key_len := i2d_PUBKEY(pkey, @key_buf);  // key_buf est avancé par OpenSSL
+    key_len := i2d_PUBKEY(pkey, @key_buf);
 
     WriteLn('Public key hex:');
     for i := 0 to key_len - 1 do
@@ -2096,7 +2108,7 @@ begin
     WriteLn;
 
     // =========================================================
-    // 4. Hash SHA-1 de la clé publique DER
+    // 5. Hash SHA-1 de la clé publique DER
     // =========================================================
     if EVP_Digest(key_buf_orig, key_len, @digest[0], @dsize,
                   EVP_sha1(), nil) = 1 then
@@ -2108,9 +2120,7 @@ begin
     end;
 
     // =========================================================
-    // 5. Modulus RSA (n) via EVP_PKEY_get_bn_param
-    //    Remplace : EVP_PKEY_get1_RSA + RSA_get0_n (dépréciés 3.0)
-    //    EVP_PKEY_get_bn_param alloue le BIGNUM si *bn = nil.
+    // 6. Modulus RSA (n) via EVP_PKEY_get_bn_param
     // =========================================================
     modulus := nil;
     if EVP_PKEY_get_bn_param(pkey, OSSL_PKEY_PARAM_RSA_N, @modulus) <> 1 then
@@ -2122,11 +2132,11 @@ begin
     if hexMod <> nil then
     begin
       WriteLn(string(AnsiString(hexMod)));
-      OPENSSL_free(hexMod);   // BN_bn2hex alloue avec OPENSSL_malloc
+      OPENSSL_free(hexMod);
     end;
 
     // =========================================================
-    // 6. Hash SHA-1 du modulus binaire
+    // 7. Hash SHA-1 du modulus binaire
     // =========================================================
     binLen := BN_num_bytes(modulus);
     GetMem(bin, binLen);
@@ -2143,14 +2153,13 @@ begin
     result := true;
 
   finally
-    if pkey         <> nil then EVP_PKEY_free(pkey);
-    if modulus      <> nil then BN_free(modulus);
+    if pkey       <> nil then EVP_PKEY_free(pkey);
+    if modulus    <> nil then BN_free(modulus);
     if key_buf_orig <> nil then FreeMem(key_buf_orig);
-    if bin          <> nil then FreeMem(bin);
-    // gardes si Exit avant BIO_push
-    if bio_base64   <> nil then BIO_free(bio_base64);
-    if bio_mem      <> nil then BIO_free(bio_mem);
-    if bioChain     <> nil then BIO_free_all(bioChain);
+    if bin        <> nil then FreeMem(bin);
+    if bio_base64 <> nil then BIO_free(bio_base64);
+    if bio_mem    <> nil then BIO_free(bio_mem);
+    if bioChain   <> nil then BIO_free_all(bioChain);
   end;
 end;
 
@@ -2541,7 +2550,7 @@ var
   cipher: PEVP_CIPHER;
   buffer: array of byte;
   buffer_len: cardinal;
-  i: byte;
+  i: cardinal;
   ret, remain: integer;
   key, iv, encrypted: array of byte;
 begin
@@ -2707,7 +2716,8 @@ begin
    //EVP_DigestInit(context,md);
    EVP_DigestInit_ex(context, md, nil);
    EVP_DigestUpdate(context, @input[0], length(input));
-   EVP_DigestFinal(context, @digest[0], @digest_len);
+   //EVP_DigestFinal(context, @digest[0], @digest_len);
+   EVP_DigestFinal_ex(context, @digest[0], @digest_len);
    //
    EVP_MD_free(md);
    EVP_MD_CTX_destroy (context);
