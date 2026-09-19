@@ -3,7 +3,7 @@
 New tinyssl but using libcrypto 3.x and https://github.com/MWASoftware/PascalAPI4OpenSSL/tree/main</br>
 
 <br/>
-TinySSL, aka playing with openssl library (libeay32) for digest, cipher and certificate matters.<br/>
+TinySSL, aka playing with openssl library for digest, cipher and certificate matters.<br/>
 <br/>
 The following command line options are valid:<br/>
 
