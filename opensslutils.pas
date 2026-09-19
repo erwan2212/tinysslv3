@@ -192,7 +192,7 @@ begin
   log('LoadPrivateKey: ' + KeyFile);
 
   // Opening in read-only mode 'r' instead of 'r+'
-  mem := BIO_new_file(PChar(KeyFile), 'r');
+  mem := BIO_new_file(PAnsiChar(AnsiString(KeyFile)), 'r');
   if mem = nil then
   begin
     log('Erreur: impossible d''ouvrir le fichier ' + KeyFile);
@@ -215,7 +215,7 @@ begin
     if Result = nil then
       log('Erreur: echec de chargement de la cle privee (mot de passe incorrect ou format invalide)');
   finally
-    BIO_free_all(mem);
+    BIO_free(mem);
   end;
 end;
 
@@ -968,7 +968,7 @@ var
   x509_cert : pX509       = nil;
   x509_req  : pX509_REQ  = nil;
   bp        : pBIO        = nil;
-  serial    : integer     = 1;
+  serial    : integer     ;
   days      : Int64       = 365 * 24 * 3600;  // 1 an en secondes
   value     : string;
   ret       : integer;
@@ -1028,6 +1028,7 @@ begin
     X509_set_version(x509_cert, 2);   // v3
 
     log('X509_get_serialNumber');
+    serial := Random($7FFFFFFF);
     ASN1_INTEGER_set(X509_get_serialNumber(x509_cert), serial);
 
     // Issuer = subject de la CA
@@ -1178,7 +1179,7 @@ var
   p        : pBIGNUM        = nil;
   value    : string;
   keyPath, certPath : string;
-  sAlgo    : string;
+  sAlgo,sAlgoForCtx    : string;
   CurveNID : integer;
 begin
   result := false;
@@ -1207,7 +1208,12 @@ begin
       { Créer le contexte de génération par nom d'algorithme.
         On passe nil pour libctx (contexte de bibliothèque par défaut)
         et nil pour propquery (pas de contrainte de propriété). }
-      kctx := EVP_PKEY_CTX_new_from_name(nil, PAnsiChar(AnsiString(sAlgo)), nil);
+        // Normaliser avant EVP_PKEY_CTX_new_from_name
+        if (AnsiUpperCase(sAlgo) = 'EC384') or (AnsiUpperCase(sAlgo) = 'EC521') then
+          sAlgoForCtx := 'EC'
+        else
+          sAlgoForCtx := sAlgo;
+      kctx := EVP_PKEY_CTX_new_from_name(nil, PAnsiChar(AnsiString(sAlgoForCtx)), nil);
       if kctx = nil then Exit;
 
       try
@@ -1654,7 +1660,9 @@ begin
 
     // PKCS1_PADDING conservé pour la compatibilité avec l'original.
     // Préférer RSA_PKCS1_OAEP_PADDING pour les nouveaux développements.
-    if EVP_PKEY_CTX_set_rsa_padding(ectx, RSA_PKCS1_PADDING) <= 0 then Exit;
+    //if EVP_PKEY_CTX_set_rsa_padding(ectx, RSA_PKCS1_PADDING) <= 0 then Exit;
+    if EVP_PKEY_CTX_set_rsa_padding(ectx, RSA_PKCS1_OAEP_PADDING) <= 0 then Exit;
+    // + optionnel : EVP_PKEY_CTX_set_rsa_oaep_md(ectx, EVP_sha256())
 
     input := AnsiString(sometext);
 
@@ -1806,7 +1814,9 @@ begin
 
     // Conserver RSA_PKCS1_PADDING pour la compatibilité avec Encrypt_Pub.
     // Passer à RSA_PKCS1_OAEP_PADDING si Encrypt_Pub est aussi mis à jour.
-    if EVP_PKEY_CTX_set_rsa_padding(dctx, RSA_PKCS1_PADDING) <= 0 then Exit;
+    //if EVP_PKEY_CTX_set_rsa_padding(dctx, RSA_PKCS1_PADDING) <= 0 then Exit;
+    if EVP_PKEY_CTX_set_rsa_padding(dctx, RSA_PKCS1_OAEP_PADDING) <= 0 then Exit;
+    // + optionnel : EVP_PKEY_CTX_set_rsa_oaep_md(ectx, EVP_sha256())
 
     // Passe 1 : obtenir la taille du buffer de sortie
     outLen := 0;
@@ -1868,119 +1878,182 @@ begin
   end;
 end;
 
-function print_req(filename:string):boolean;
+function print_req(filename: string): boolean;
 var
- bp:pbio;
- X509_REQ:pX509_REQ;
- name:pX509_NAME=nil;
- b64len,key_len,i,size:cardinal;
- key:pEVP_PKEY;
- bio_mem,bio_base64,bio:pBIO;
- data:array [0..4095] of char;
- key_buf,pb:pbyte;
- digest:array [0..EVP_MAX_MD_SIZE-1] of byte;
+  bp: pBIO;
+  req: pX509_REQ;
+  name: pX509_NAME;
+  key: pEVP_PKEY;
+  bio_mem, bio_base64: pBIO;
+  data: array [0..4095] of char;
+  key_buf, key_buf_orig, pb: pbyte;
+  digest: array [0..EVP_MAX_MD_SIZE - 1] of byte;
+  key_len, size: cardinal;
+  b64len: integer;
+  i: cardinal;
 begin
-  result:=false;
-  bp := BIO_new_file(pchar(filename), 'r+');
-  log('PEM_read_bio_X509_REQ');
-  X509_REQ := PEM_read_bio_X509_REQ(bp, nil, nil, nil);
-  BIO_free(bp);
+  Result := False;
+  bp := nil;
+  req := nil;
+  key := nil;
+  bio_mem := nil;
+  bio_base64 := nil;
+  key_buf := nil;
+  key_buf_orig := nil;
 
-  log('X509_REQ_get_subject_name');
-  NAME:=X509_REQ_get_subject_name(X509_REQ);
-  writeln('subject_name:'+getdn(name));
+  // 1. Ouverture sécurisée du fichier (conversion explicite Ansi pour Windows)
+  bp := BIO_new_file(PAnsiChar(AnsiString(filename)), 'r');
+  if bp = nil then
+  begin
+    writeln('Erreur: Impossible d''ouvrir le fichier CSR');
+    Exit;
+  end;
 
-  log('X509_REQ_get_pubkey');
-  key:=X509_REQ_get_pubkey (X509_REQ);
-  //lets display the pubkey
-  bio_mem := BIO_new(BIO_s_mem());
-  bio_base64 := BIO_new(BIO_f_base64());
-  bio:=BIO_push(bio_base64, bio_mem);
-  //write to bio
-  PEM_write_bio_PUBKEY(bio_base64, key );
-  Bio_flush(bio_base64);
-  //read from bio
-  b64len:=BIO_read(bio_base64, @data[0], sizeof(data)-1);
-  writeln();
-  data[b64len] := #0;
-  writeln('Public key base64:');
-  writeln(data);
-  //EVP_PKEY_free(key);
-  BIO_free_all(bio_base64);//BIO_free(bio_base64);BIO_free(bio_mem);
+  try
+    log('PEM_read_bio_X509_REQ');
+    req := PEM_read_bio_X509_REQ(bp, nil, nil, nil);
+    if req = nil then
+    begin
+      writeln('Erreur: Lecture de la requête CSR échouée');
+      Exit;
+    end;
 
-  key_len := i2d_PUBKEY(key, nil);
-  GetMem(key_buf, key_len);
-  pb:=key_buf ; //https://stackoverflow.com/questions/50952528/get-publickey-certificate-in-der-format-with-openssl-in-c
-  key_len := i2d_PUBKEY(key, @key_buf);
-  writeln('Public key hex:');
-  for i := 0 to key_len - 1 do Write(IntToHex(pb[i], 2));
-  writeln;
+    log('X509_REQ_get_subject_name');
+    name := X509_REQ_get_subject_name(req);
+    if name <> nil then
+      writeln('subject_name:' + getdn(name));
 
-  if evp_digest(pb , key_len,@digest[0],@size,EVP_sha1(),nil)=1 then
-     begin
-     writeln('Public key hash (sha1):');
-     for i:=0 to size -1 do write(inttohex(digest[i],2));
-     writeln;
-     end;
+    log('X509_REQ_get_pubkey');
+    key := X509_REQ_get_pubkey(req);
+    if key = nil then
+    begin
+      writeln('Erreur: Impossible d''extraire la clé publique');
+      Exit;
+    end;
 
-  result:=true;
+    // Chaîne de BIOs pour l'affichage Base64
+    bio_mem := BIO_new(BIO_s_mem());
+    bio_base64 := BIO_new(BIO_f_base64());
+    if (bio_mem = nil) or (bio_base64 = nil) then
+    begin
+      writeln('Erreur: Allocation des objets BIO échouée');
+      Exit;
+    end;
+
+    // On pousse bio_mem dans bio_base64 (ou l'inverse selon votre configuration de chaînage)
+    // Ici on respecte votre logique de chaînage
+    BIO_push(bio_base64, bio_mem);
+
+    PEM_write_bio_PUBKEY(bio_base64, key);
+    BIO_flush(bio_base64);
+
+    //b64len := BIO_read(bio_base64, @data[0], sizeof(data) - 1);
+    b64len := BIO_read(bio_mem, @data[0], sizeof(data)-1);  // ← doit être bio_mem
+    writeln();
+
+    if b64len > 0 then
+    begin
+      data[b64len] := #0;
+      writeln('Public key base64:');
+      writeln(data);
+    end
+    else
+    begin
+      writeln('Erreur lors de la lecture de la clé en base64');
+    end;
+
+    // Extraction de la clé au format DER (i2d_PUBKEY modifie le pointeur passé en paramètre)
+    key_len := i2d_PUBKEY(key, nil);
+    if key_len > 0 then
+    begin
+      GetMem(key_buf, key_len);
+      key_buf_orig := key_buf; // Sauvegarde indispensable pour le FreeMem ultérieur !
+      pb := key_buf;
+
+      key_len := i2d_PUBKEY(key, @key_buf);
+
+      writeln('Public key hex:');
+      for i := 0 to key_len - 1 do
+        Write(IntToHex(pb[i], 2));
+      writeln;
+
+      size := 0;
+      if evp_digest(pb, key_len, @digest[0], @size, EVP_sha1(), nil) = 1 then
+      begin
+        writeln('Public key hash (sha1):');
+        for i := 0 to size - 1 do
+          write(inttohex(digest[i], 2));
+        writeln;
+      end;
+    end;
+
+    Result := True;
+
+  finally
+    // Nettoyage rigoureux des ressources allouées (ordre inverse ou sécurisé)
+    if key_buf_orig <> nil then
+      FreeMem(key_buf_orig);
+
+    if bio_base64 <> nil then
+      BIO_free_all(bio_base64) // Libère la chaîne BIO complète (inclut bio_mem)
+    else if bio_mem <> nil then
+      BIO_free(bio_mem);
+
+    if key <> nil then
+      EVP_PKEY_free(key);
+
+    if req <> nil then
+      X509_REQ_free(req);
+
+    if bp <> nil then
+      BIO_free(bp);
+  end;
 end;
 
 //openssl rsa -noout -text -in ca.key
 function print_private(filename: string; password: string = ''): boolean;
 const
-  // Constante OpenSSL 3.0 pour le paramètre "modulus" d'une clé RSA.
-  // Définie dans openssl/rsa.h : #define OSSL_PKEY_PARAM_RSA_N "n"
   OSSL_PKEY_PARAM_RSA_N = 'n';
 
 var
-  pkey        : PEVP_PKEY  = nil;
-  // clé publique DER
-  key_buf     : PByte      = nil;
-  key_buf_orig: PByte      = nil;   // garde le pointeur d'origine pour FreeMem
-  key_len     : integer;
-  // modulus RSA via EVP_PKEY_get_bn_param
-  modulus     : PBIGNUM    = nil;
-  bin         : PByte      = nil;
-  binLen      : integer;
-  // digest
-  digest      : array [0..EVP_MAX_MD_SIZE - 1] of byte;
-  dsize       : TOpenSSL_C_UINT;
-  // affichage PEM clé publique
-  bio_mem     : pBIO       = nil;
-  bio_base64  : pBIO       = nil;
-  bioChain    : pBIO       = nil;
-  pemData     : AnsiString;
-  pemLen      : integer;
-  // boucles
-  i           : integer;
-  hexMod      : PAnsiChar;
+  pkey         : PEVP_PKEY  = nil;
+  key_buf      : PByte      = nil;
+  key_buf_orig : PByte      = nil;
+  key_len      : integer;
+  modulus      : PBIGNUM    = nil;
+  bin          : PByte      = nil;
+  binLen       : integer;
+  digest       : array [0..EVP_MAX_MD_SIZE - 1] of byte;
+  dsize        : TOpenSSL_C_UINT;
+  bio_mem      : pBIO       = nil;
+  bio_base64   : pBIO       = nil;
+  bioChain     : pBIO       = nil;
+  pemData      : AnsiString;
+  pemLen       : integer;
+  i            : integer;
+  hexMod       : PAnsiChar;
 begin
   result := false;
 
-  // =========================================================
   // 1. Chargement de la clé privée
-  // =========================================================
   pkey := LoadPrivateKey(filename, password);
   if pkey = nil then Exit;
 
   try
     // =========================================================
-    // 2. Affichage de la clé publique en PEM (Base64)
-    //    BIO_read depuis bio_mem (pas depuis le filtre b64)
-    //    pour obtenir le PEM déjà formaté par OpenSSL.
+    // 2. Affichage de la clé PRIVÉE en PEM (Base64)
     // =========================================================
     bio_mem    := BIO_new(BIO_s_mem());
     bio_base64 := BIO_new(BIO_f_base64());
     if (bio_mem = nil) or (bio_base64 = nil) then Exit;
 
     bioChain := BIO_push(bio_base64, bio_mem);
-    bio_base64 := nil;   // appartient à la chaîne
+    bio_base64 := nil;
 
-    PEM_write_bio_PUBKEY(bioChain, pkey);
+    // Écriture de la clé privée (non chiffrée en sortie par les paramètres nil, nil, 0)
+    PEM_write_bio_PrivateKey(bioChain, pkey, nil, nil, 0, nil, nil);
     BIO_flush(bioChain);
 
-    // Lire depuis bio_mem (l'extrémité mémoire de la chaîne)
     pemLen := BIO_pending(bio_mem);
     SetLength(pemData, pemLen);
     BIO_read(bio_mem, @pemData[1], pemLen);
@@ -1990,21 +2063,42 @@ begin
     bio_mem   := nil;
 
     WriteLn;
+    WriteLn('Private key base64:');
+    WriteLn(string(pemData));
+
+    // =========================================================
+    // 3. Affichage de la clé PUBLIQUE en PEM (Base64)
+    // =========================================================
+    bio_mem    := BIO_new(BIO_s_mem());
+    bio_base64 := BIO_new(BIO_f_base64());
+    if (bio_mem = nil) or (bio_base64 = nil) then Exit;
+
+    bioChain := BIO_push(bio_base64, bio_mem);
+    bio_base64 := nil;
+
+    PEM_write_bio_PUBKEY(bioChain, pkey);
+    BIO_flush(bioChain);
+
+    pemLen := BIO_pending(bio_mem);
+    SetLength(pemData, pemLen);
+    BIO_read(bio_mem, @pemData[1], pemLen);
+
+    BIO_free_all(bioChain);
+    bioChain  := nil;
+    bio_mem   := nil;
+
     WriteLn('Public key base64:');
     WriteLn(string(pemData));
 
     // =========================================================
-    // 3. Clé publique en DER puis hex
-    //    i2d_PUBKEY avec out=nil donne la taille, puis alloue.
-    //    ATTENTION : i2d_PUBKEY avance le pointeur — on garde
-    //    une copie de l'adresse d'origine pour FreeMem.
+    // 4. Clé publique en DER puis hex
     // =========================================================
     key_len := i2d_PUBKEY(pkey, nil);
     if key_len <= 0 then Exit;
 
     GetMem(key_buf, key_len);
     key_buf_orig := key_buf;
-    key_len := i2d_PUBKEY(pkey, @key_buf);  // key_buf est avancé par OpenSSL
+    key_len := i2d_PUBKEY(pkey, @key_buf);
 
     WriteLn('Public key hex:');
     for i := 0 to key_len - 1 do
@@ -2012,7 +2106,7 @@ begin
     WriteLn;
 
     // =========================================================
-    // 4. Hash SHA-1 de la clé publique DER
+    // 5. Hash SHA-1 de la clé publique DER
     // =========================================================
     if EVP_Digest(key_buf_orig, key_len, @digest[0], @dsize,
                   EVP_sha1(), nil) = 1 then
@@ -2024,9 +2118,7 @@ begin
     end;
 
     // =========================================================
-    // 5. Modulus RSA (n) via EVP_PKEY_get_bn_param
-    //    Remplace : EVP_PKEY_get1_RSA + RSA_get0_n (dépréciés 3.0)
-    //    EVP_PKEY_get_bn_param alloue le BIGNUM si *bn = nil.
+    // 6. Modulus RSA (n) via EVP_PKEY_get_bn_param
     // =========================================================
     modulus := nil;
     if EVP_PKEY_get_bn_param(pkey, OSSL_PKEY_PARAM_RSA_N, @modulus) <> 1 then
@@ -2038,11 +2130,11 @@ begin
     if hexMod <> nil then
     begin
       WriteLn(string(AnsiString(hexMod)));
-      OPENSSL_free(hexMod);   // BN_bn2hex alloue avec OPENSSL_malloc
+      OPENSSL_free(hexMod);
     end;
 
     // =========================================================
-    // 6. Hash SHA-1 du modulus binaire
+    // 7. Hash SHA-1 du modulus binaire
     // =========================================================
     binLen := BN_num_bytes(modulus);
     GetMem(bin, binLen);
@@ -2059,14 +2151,13 @@ begin
     result := true;
 
   finally
-    if pkey         <> nil then EVP_PKEY_free(pkey);
-    if modulus      <> nil then BN_free(modulus);
+    if pkey       <> nil then EVP_PKEY_free(pkey);
+    if modulus    <> nil then BN_free(modulus);
     if key_buf_orig <> nil then FreeMem(key_buf_orig);
-    if bin          <> nil then FreeMem(bin);
-    // gardes si Exit avant BIO_push
-    if bio_base64   <> nil then BIO_free(bio_base64);
-    if bio_mem      <> nil then BIO_free(bio_mem);
-    if bioChain     <> nil then BIO_free_all(bioChain);
+    if bin        <> nil then FreeMem(bin);
+    if bio_base64 <> nil then BIO_free(bio_base64);
+    if bio_mem    <> nil then BIO_free(bio_mem);
+    if bioChain   <> nil then BIO_free_all(bioChain);
   end;
 end;
 
@@ -2323,6 +2414,9 @@ begin
 
   end; // for num
 
+  if certs <> nil then
+     openssl_sk_pop_free(certs, @FreeX509Callback);
+
   result := true;
 end;
 
@@ -2474,7 +2568,6 @@ begin
     exit;
   end;
 
-  //cipher := EVP_get_cipherbyname(pchar(algo));
   cipher := EVP_CIPHER_fetch(nil, PAnsiChar(AnsiString(algo)), nil);
   if cipher = nil then
   begin
@@ -2483,121 +2576,115 @@ begin
     exit;
   end;
 
-  log('cipher:' + strpas(OBJ_nid2sn(EVP_CIPHER_nid(cipher))));
+  try
+    log('cipher:' + strpas(OBJ_nid2sn(EVP_CIPHER_nid(cipher))));
 
-  // Key was supplied
-  if keystr <> '' then
-  begin
-    key := HexaStringToByte2(keystr);
-    write('key:');
-    for i := 0 to length(key) - 1 do write(inttohex(key[i], 2));
-    writeln;
-  end
-  else if EVP_CIPHER_key_length(cipher) > 0 then
-  begin
-    writeln('random key');
-    SetLength(key, EVP_CIPHER_key_length(cipher));
-    RAND_bytes(@key[0], length(key));
-    write('key:');
-    for i := 0 to length(key) - 1 do write(inttohex(key[i], 2));
-    writeln;
+    // Key was supplied
+    if keystr <> '' then
+    begin
+      key := HexaStringToByte2(keystr);
+      write('key:');
+      for i := 0 to length(key) - 1 do write(inttohex(key[i], 2));
+      writeln;
+    end
+    else if EVP_CIPHER_key_length(cipher) > 0 then
+    begin
+      writeln('random key');
+      SetLength(key, EVP_CIPHER_key_length(cipher));
+      RAND_bytes(@key[0], length(key));
+      write('key:');
+      for i := 0 to length(key) - 1 do write(inttohex(key[i], 2));
+      writeln;
+    end;
+
+    // IV was supplied
+    if ivstr <> '' then
+    begin
+      iv := HexaStringToByte2(ivstr);
+      write('iv:');
+      for i := 0 to length(iv) - 1 do write(inttohex(iv[i], 2));
+      writeln;
+    end
+    else if EVP_CIPHER_iv_length(cipher) > 0 then
+    begin
+      writeln('random iv');
+      SetLength(iv, EVP_CIPHER_iv_length(cipher));
+      RAND_bytes(@iv[0], length(iv));
+      write('iv:');
+      for i := 0 to length(iv) - 1 do write(inttohex(iv[i], 2));
+      writeln;
+    end;
+
+    log('***********************************');
+    log('key_length:' + inttostr(EVP_CIPHER_key_length(cipher)));
+    log('iv_length:' + inttostr(EVP_CIPHER_iv_length(cipher)));
+    log('block_size:' + inttostr(EVP_CIPHER_block_size(cipher)));
+    log('***********************************');
+
+    if length(key) <> EVP_CIPHER_key_length(cipher) then
+    begin
+      writeln('key length incorrect:' + inttostr(length(key)));
+      exit;
+    end;
+
+    if (EVP_CIPHER_iv_length(cipher) > 0) and (length(iv) <> EVP_CIPHER_iv_length(cipher)) then
+    begin
+      writeln('iv length incorrect:' + inttostr(length(iv)));
+      exit;
+    end;
+
+    log('EVP_CipherInit_ex');
+    if EVP_CIPHER_iv_length(cipher) > 0 then
+      ret := EVP_CipherInit_ex(context, cipher, nil, @key[0], @iv[0], enc)
+    else
+      ret := EVP_CipherInit_ex(context, cipher, nil, @key[0], nil, enc);
+
+    if ret <> 1 then
+      raise Exception.Create('EVP_CipherInit_ex failed');
+
+    log('EVP_CipherUpdate');
+    SetLength(buffer, Length(input) + EVP_CIPHER_block_size(cipher) + 16);
+    if enc = 0 then
+    begin
+      encrypted := HexaStringToByte2(input);
+      ret := EVP_CipherUpdate(context, @buffer[0], @buffer_len, @encrypted[0], length(encrypted));
+    end
+    else
+      ret := EVP_CipherUpdate(context, @buffer[0], @buffer_len, pbyte(pointer(input)), length(input));
+
+    if ret <> 1 then
+      raise Exception.Create('EVP_CipherUpdate failed');
+
+    log('EVP_CipherFinal_ex');
+    remain := 0;
+    ret := EVP_CipherFinal_ex(context, @buffer[buffer_len], @remain);
+    if ret <> 1 then
+      raise Exception.Create('EVP_CipherFinal_ex failed');
+    inc(buffer_len, remain);
+
+    if buffer_len > 0 then
+    begin
+      for i := 0 to buffer_len - 1 do
+        write(inttohex(buffer[i], 2));
+      writeln;
+
+      if enc = 0 then
+      begin
+        for i := 0 to buffer_len - 1 do
+          write(chr(buffer[i]));
+        writeln;
+      end;
+    end;
+
+    result := true;
+
+  finally
+    log('Cleanup resources');
+    if cipher <> nil then
+      EVP_CIPHER_free(cipher);
+    if context <> nil then
+      EVP_CIPHER_CTX_free(context);
   end;
-
-  // IV was supplied
-  if ivstr <> '' then
-  begin
-    iv := HexaStringToByte2(ivstr);
-    write('iv:');
-    for i := 0 to length(iv) - 1 do write(inttohex(iv[i], 2));
-    writeln;
-  end
-  else if EVP_CIPHER_iv_length(cipher) > 0 then
-  begin
-    writeln('random iv');
-    SetLength(iv, EVP_CIPHER_iv_length(cipher));
-    RAND_bytes(@iv[0], length(iv));
-    write('iv:');
-    for i := 0 to length(iv) - 1 do write(inttohex(iv[i], 2));
-    writeln;
-  end;
-
-  log('***********************************');
-  log('key_length:' + inttostr(EVP_CIPHER_key_length(cipher)));
-  log('iv_length:' + inttostr(EVP_CIPHER_iv_length(cipher)));
-  log('block_size:' + inttostr(EVP_CIPHER_block_size(cipher)));
-  log('***********************************');
-
-  if length(key) <> EVP_CIPHER_key_length(cipher) then
-  begin
-    writeln('key length incorrect:' + inttostr(length(key)));
-    EVP_CIPHER_CTX_free(context);
-    exit;
-  end;
-
-  if (EVP_CIPHER_iv_length(cipher) > 0) and (length(iv) <> EVP_CIPHER_iv_length(cipher)) then
-  begin
-    writeln('iv length incorrect:' + inttostr(length(iv)));
-    EVP_CIPHER_CTX_free(context);
-    exit;
-  end;
-
-  log('EVP_CipherInit_ex');
-  if EVP_CIPHER_iv_length(cipher) > 0 then
-    ret := EVP_CipherInit_ex(context, cipher, nil, @key[0], @iv[0], enc)
-  else
-    ret := EVP_CipherInit_ex(context, cipher, nil, @key[0], nil, enc);
-
-  if ret <> 1 then
-  begin
-    EVP_CIPHER_CTX_free(context);
-    raise Exception.Create('EVP_CipherInit_ex failed');
-  end;
-
-  log('EVP_CipherUpdate');
-  SetLength(buffer, Length(input) + EVP_CIPHER_block_size(cipher) + 16);
-  if enc = 0 then
-  begin
-    encrypted := HexaStringToByte2(input);
-    ret := EVP_CipherUpdate(context, @buffer[0], @buffer_len, @encrypted[0], length(encrypted));
-  end
-  else
-    ret := EVP_CipherUpdate(context, @buffer[0], @buffer_len, pbyte(pointer(input)), length(input));
-
-  if ret <> 1 then
-  begin
-    EVP_CIPHER_CTX_free(context);
-    raise Exception.Create('EVP_CipherUpdate failed');
-  end;
-
-  log('EVP_CipherFinal_ex');
-  remain := 0;
-  ret := EVP_CipherFinal_ex(context, @buffer[buffer_len], @remain);
-  if ret <> 1 then
-  begin
-    EVP_CIPHER_CTX_free(context);
-    raise Exception.Create('EVP_CipherFinal_ex failed');
-  end;
-  inc(buffer_len, remain);
-
-  log('EVP_CIPHER_CTX_free');
-  EVP_CIPHER_free(cipher);
-  EVP_CIPHER_CTX_free(context);
-
-  if buffer_len <= 0 then
-    exit;
-
-  for i := 0 to buffer_len - 1 do
-    write(inttohex(buffer[i], 2));
-  writeln;
-
-  if enc = 0 then
-  begin
-    for i := 0 to buffer_len - 1 do
-      write(chr(buffer[i]));
-    writeln;
-  end;
-
-  result := true;
 end;
 
 function hash(algo:string;input:array of byte):boolean;
@@ -2624,7 +2711,8 @@ begin
    log('digest:'+strpas(OBJ_nid2sn(EVP_MD_type(md))));
    log('length(input):'+inttostr(length(input)));
 
-   EVP_DigestInit(context,md);
+   //EVP_DigestInit(context,md);
+   EVP_DigestInit_ex(context, md, nil);
    EVP_DigestUpdate(context, @input[0], length(input));
    EVP_DigestFinal(context, @digest[0], @digest_len);
    //
@@ -2637,75 +2725,87 @@ begin
    result:=true;
 end;
 
-function Base64Encode(message:array of byte):boolean;
+function Base64Encode(message: array of byte): boolean;
 var
-bio_mem,bio_base64,bio:pbio;
-b64len:integer=0;
-data:array [0..8192-1] of char;
-ret:integer;
+  bio_mem, bio_base64, bio: pBIO;
+  b64len: integer = 0;
+  data: AnsiString;
+  ret: integer;
 begin
-  result:=false;
+  result := false;
+  if High(message) < 0 then Exit;
+
   bio_base64 := BIO_new(BIO_f_base64());
-  //BIO_set_flags(bio_base64, BIO_FLAGS_BASE64_NO_NL); //Ignore newlines - write everything in one line
+  //BIO_set_flags(bio_base64, BIO_FLAGS_BASE64_NO_NL); // Ignore newlines
   bio_mem := BIO_new(BIO_s_mem());
-  bio:=BIO_push(bio_base64, bio_mem);
-  //write to bio
-  ret:=bio_write(bio, @message[0],length(message) );
-  log('bio_write:'+inttostr(ret));
-  Bio_flush(bio);
-  //read from bio
-  b64len:=BIO_read(bio_mem, @data[0], sizeof(data)); //sizeof(data)-1?
-  log('BIO_read:'+inttostr(b64len));
-  data[b64len] := #0;
-  writeln(data);
-  //
-  bio_free_all(bio);
-  result:=b64len<>0;
+  bio := BIO_push(bio_base64, bio_mem);
+
+  // Écriture dans la chaîne BIO
+  ret := BIO_write(bio, @message[0], Length(message));
+  log('bio_write:' + IntToStr(ret));
+  BIO_flush(bio);
+
+  // Récupération dynamique de la taille exacte disponible avec BIO_pending
+  b64len := BIO_pending(bio_mem);
+  SetLength(data, b64len);
+
+  if b64len > 0 then
+    BIO_read(bio_mem, @data[1], b64len);
+
+  log('BIO_read:' + IntToStr(b64len));
+  WriteLn(string(data));
+
+  BIO_free_all(bio);
+  result := (b64len <> 0);
 end;
 
-function Base64Decode(message:string;utf16:boolean=false):boolean;
+function Base64Decode(message: string; utf16: boolean = false): boolean;
 var
-  bio_mem,bio_base64,bio:pbio;
-  encodedSize:integer;
-  data:array [0..8192-1] of byte;
-  ret:integer;
+  bio_mem, bio_base64, bio: pbio;
+  maxDecodedSize: integer;
+  data: TBytes;
+  ret: integer;
 begin
-  result:=false;
-  encodedSize := 4*ceil(float(length(message) / 3));
-  //log('encodedSize:'+inttostr(encodedSize));
-  log('message:'+inttostr(length(message)));
+  result := false;
+  if message = '' then Exit;
 
-  {
-  //works but not with big inputs - to be reviewed
-  ret:=EVP_DecodeBlock(@data[0],@message[1],length(message));
-  log('EVP_DecodeBlock:'+inttostr(ret));
-  }
+  log('message:' + inttostr(length(message)));
 
+  // Calcul de la taille maximale décodée (4 caractères source -> 3 octets décodés) + marge de sécurité
+  maxDecodedSize := (length(message) * 3) div 4 + 16;
+  SetLength(data, maxDecodedSize);
 
   bio_base64 := BIO_new(BIO_f_base64());
   bio_mem := BIO_new_mem_buf(@message[1], length(message));
   bio := BIO_push(bio_base64, bio_mem);
-  //BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); //Ignore newlines - write everything in one line
-  ret:=BIO_read(bio, @data[0] , length(data));
-  log('BIO_read:'+inttostr(ret));
 
-  if ret=0 then
-     begin
-     BIO_reset (bio);
-     log('set flags BIO_FLAGS_BASE64_NO_NL');
-     BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); //Ignore newlines - write everything in one line
-     ret:=BIO_read(bio, @data[0] , length(data));
-     log('BIO_read:'+inttostr(ret));
-     end;
+  ret := BIO_read(bio, @data[0], Length(data));
+  log('BIO_read:' + inttostr(ret));
+
+  if ret <= 0 then
+  begin
+    BIO_reset(bio);
+    log('set flags BIO_FLAGS_BASE64_NO_NL');
+    BIO_set_flags(bio_base64, BIO_FLAGS_BASE64_NO_NL); // Appliqué sur le filtre base64
+    ret := BIO_read(bio, @data[0], Length(data));
+    log('BIO_read:' + inttostr(ret));
+  end;
 
   BIO_free_all(bio);
 
-  data[ret] := 0;
-  if utf16=true
-     then writeln(ansistring(TEncoding.Unicode.GetString(data,0,ret)))
-     else writeln(strpas(@data[0]));
+  if ret > 0 then
+  begin
+    // Ajustement de la taille réelle et ajout du terminateur nul pour strpas
+    SetLength(data, ret + 1);
+    data[ret] := 0;
 
-  result:=true;
+    if utf16 then
+      writeln(string(TEncoding.Unicode.GetString(data, 0, ret)))
+    else
+      writeln(strpas(PAnsiChar(@data[0])));
+
+    result := true;
+  end;
 end;
 
 function PrintSSHKey(filename: string): Boolean;
@@ -2849,23 +2949,67 @@ end;
 function PrintSSHECDSAKey(pubkey: PEVP_PKEY): Boolean;
 const
   OSSL_PKEY_PARAM_PUB_KEY = 'pub';
+  OSSL_PKEY_PARAM_GROUP   = 'group'; // Paramètre standard OpenSSL 3.0 pour la courbe EC
 var
-  key_type, curve_name : PAnsiChar;
+  key_type, curve_name : string;
   key_type_len, curve_name_len : Integer;
   pub_key_bytes : TBytes;
-  pub_key_len   : TOpenSSL_C_SIZET; //Size_t;
+  pub_key_len   : TOpenSSL_C_SIZET;
   buf           : TBytes;
   offset        : Integer;
-  bio_mem       : PBIO      = nil;
-  bio_b64       : PBIO      = nil;
-  bioChain      : PBIO      = nil;
+  bio_mem       : PBIO     = nil;
+  bio_b64       : PBIO     = nil;
+  bioChain      : PBIO     = nil;
   b64_ptr       : PAnsiChar;
   b64_len       : LongInt;
   b64_str       : string;
+
+  // Variables pour la récupération dynamique de la courbe
+  curve_buf     : array[0..63] of AnsiChar;
+  curve_len     : TOpenSSL_C_SIZET;
+  openssl_curve : string;
 begin
   Result := False;
 
-  // 1. Récupération du point public brut (contient déjà 0x04 + X + Y)
+  // 1. Détection dynamique de la courbe EC via le paramètre 'group'
+  curve_len := SizeOf(curve_buf) - 1;
+  FillChar(curve_buf, SizeOf(curve_buf), 0);
+
+  if EVP_PKEY_get_utf8_string_param(pubkey, OSSL_PKEY_PARAM_GROUP, @curve_buf[0], curve_len, @curve_len) <> 1 then
+  begin
+    WriteLn('Failed to get ECDSA curve group parameter');
+    Exit;
+  end;
+
+  openssl_curve := LowerCase(Trim(string(AnsiString(@curve_buf[0]))));
+
+  // Mapping des noms OpenSSL vers les nomenclatures OpenSSH
+  // OpenSSL renvoie souvent "prime256v1" ou "secp256r1", "secp384r1", "secp521r1"
+  if (openssl_curve = 'prime256v1') or (openssl_curve = 'secp256r1') then
+  begin
+    curve_name := 'nistp256';
+    key_type   := 'ecdsa-sha2-nistp256';
+  end
+  else if openssl_curve = 'secp384r1' then
+  begin
+    curve_name := 'nistp384';
+    key_type   := 'ecdsa-sha2-nistp384';
+  end
+  else if openssl_curve = 'secp521r1' then
+  begin
+    curve_name := 'nistp521';
+    key_type   := 'ecdsa-sha2-nistp521';
+  end
+  else
+  begin
+    WriteLn('Unsupported or unknown ECDSA curve: ', openssl_curve);
+    Exit;
+  end;
+
+  key_type_len   := Length(key_type);
+  curve_name_len := Length(curve_name);
+
+  // 2. Récupération du point public brut (contient déjà 0x04 + X + Y)
   pub_key_len := 0;
   if EVP_PKEY_get_octet_string_param(pubkey, OSSL_PKEY_PARAM_PUB_KEY, nil, 0, @pub_key_len) <> 1 then
   begin
@@ -2880,13 +3024,7 @@ begin
     Exit;
   end;
 
-  key_type   := 'ecdsa-sha2-nistp256';
-  key_type_len := Length(key_type);
-
-  curve_name := 'nistp256'; // Nom standard attendu par SSH pour cette courbe
-  curve_name_len := Length(curve_name);
-
-  // 2. Construction du buffer binaire OpenSSH pour ECDSA :
+  // 3. Construction du buffer binaire OpenSSH pour ECDSA :
   // [4: len(type)][type][4: len(curve)][curve][4: len(Q)][Q]
   SetLength(buf, SizeOf(Integer) + key_type_len +
                  SizeOf(Integer) + curve_name_len +
@@ -2896,13 +3034,13 @@ begin
   // Type de clé
   PInteger(@buf[offset])^ := htonl(key_type_len);
   Inc(offset, SizeOf(Integer));
-  Move(key_type[1], buf[offset], key_type_len);
+  Move(PAnsiChar(AnsiString(key_type))[0], buf[offset], key_type_len);
   Inc(offset, key_type_len);
 
   // Nom de la courbe
   PInteger(@buf[offset])^ := htonl(curve_name_len);
   Inc(offset, SizeOf(Integer));
-  Move(curve_name[1], buf[offset], curve_name_len);
+  Move(PAnsiChar(AnsiString(curve_name))[0], buf[offset], curve_name_len);
   Inc(offset, curve_name_len);
 
   // Point public Q
@@ -2911,7 +3049,7 @@ begin
   Move(pub_key_bytes[0], buf[offset], pub_key_len);
   Inc(offset, pub_key_len);
 
-  // 3. Encodage Base64 via chaîne BIO (similaire à RSA)
+  // 4. Encodage Base64 via chaîne BIO
   bio_b64 := BIO_new(BIO_f_base64());
   bio_mem := BIO_new(BIO_s_mem());
   if (bio_b64 = nil) or (bio_mem = nil) then Exit;
