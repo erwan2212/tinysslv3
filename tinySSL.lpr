@@ -133,6 +133,8 @@ begin
   //
   cmd.declareflag('s_client', 'will retrieve ssl information from remote host, cn=host');
   //
+  // Dans la déclaration des flags :
+  cmd.declareflag('verify', 'verify a certificate against a ca cert (use cert and filename)');
   cmd.declareflag('print_cert', 'print cert details from cert');
   cmd.declareflag('print_private', 'print cert details from privatekey');
   cmd.declareflag('print_request', 'print request details from filename');
@@ -522,6 +524,29 @@ begin
     exit;
     end;
     }
+
+    // Dans la gestion des conditions :
+  if cmd.existsProperty('verify') = true then
+  begin
+    try
+      LoadSSL;
+      cert := cmd.readString('cert');      // ex: ca.crt
+      filename := cmd.readString('filename'); // ex: server.crt
+      if (cert = '') or (filename = '') then
+      begin
+        writeln('Erreur: --cert et --filename sont requis.');
+        exit;
+      end;
+
+      if verify_certificate(filename, cert) then
+        writeln('ok (Certificat valide)')
+      else
+        writeln('not ok (Certificat invalide ou chaîne non brisée)');
+    finally
+      FreeSSL;
+    end;
+    exit;
+  end;
 
     if cmd.existsProperty('print_cert')=true then
     begin

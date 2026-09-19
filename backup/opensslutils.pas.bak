@@ -20,6 +20,7 @@ uses
   openssl_pkcs12,
   openssl_x509,      // Pour X509_*, X509_NAME_*, pSTACK_OFX509...
   openssl_x509v3,
+  openssl_x509_vfy,
   // Formats et utilitaires
   openssl_pem,       // Pour PEM_read_bio_*, PEM_write_bio_*
   openssl_bio,       // Pour BIO_new_file, BIO_free...
@@ -54,6 +55,7 @@ function PVTPEM2DER(filename:string):boolean;
 function X509DER2PEM(filename:string):boolean;
 function X509PEM2DER(filename:string):boolean;
 
+function verify_certificate(const cert_path, ca_path: string): boolean;
 function print_cert(filename:string):boolean;
 function print_private(filename:string;password:string=''):boolean;
 function print_req(filename:string):boolean;
@@ -87,11 +89,36 @@ const
   NID_ext_key_usage           = 180;
 
 
-function LoadSSL: Boolean;
-begin
-  // Charge dynamiquement les bibliothèques OpenSSL et initialise les sous-systèmes
-  Result := GetIOpenSSL.Init;
-end;
+  function LoadSSL: Boolean;
+  var
+    default_prov, legacy_prov: POSSL_PROVIDER;
+  begin
+    Result := False;
+
+    // 1. Initialisation de base du wrapper OpenSSL
+    if not GetIOpenSSL.Init then
+      Exit;
+
+    // 2. Chargement explicite du provider par défaut (standard)
+    default_prov := OSSL_PROVIDER_load(nil, 'default');
+    if default_prov = nil then
+    begin
+      writeln('Erreur: Impossible de charger le provider "default"');
+      Exit;
+    end;
+
+    {
+    // 3. Chargement explicite du provider legacy (pour Whirlpool, MDC2, RIPEMD, etc.)
+    legacy_prov := OSSL_PROVIDER_load(nil, 'legacy');
+    if legacy_prov = nil then
+    begin
+      writeln('Avertissement: Impossible de charger le provider "legacy"');
+      // Vous pouvez choisir de bloquer ou de continuer selon si le legacy est critique
+    end;
+    }
+
+    Result := True;
+  end;
 
 
 
@@ -882,6 +909,7 @@ begin
 end;
 
 {
+//obsolete - not used
 function BN_num_bytes(bits:integer):integer;
 begin
   result:=ceil(bits / 8);
@@ -2367,11 +2395,18 @@ begin
   if cipher<>nil then writeln(strpas(OBJ_nid2sn(EVP_CIPHER_nid(cipher))));
 end;
 
+procedure ciphers_provided(cipher: PEVP_CIPHER; arg: pointer); cdecl;
+begin
+  if cipher <> nil then
+    WriteLn(string(AnsiString(EVP_CIPHER_get0_name(cipher))));
+end;
+
 function list_ciphers:boolean;
 begin
   result:=false;
   log('list_ciphers');
-  EVP_CIPHER_do_all_sorted (@ciphers_sorted, nil);
+  //EVP_CIPHER_do_all_sorted (@ciphers_sorted, nil);
+  EVP_CIPHER_do_all_provided(nil, @ciphers_provided, nil);
   result:=true;
 end;
 
@@ -2381,11 +2416,27 @@ begin
   if hash<>nil then writeln(strpas(OBJ_nid2sn(EVP_MD_type(hash))));
 end;
 
+procedure hashes_provided(hash: pEVP_MD; arg: pointer); cdecl;
+var
+  alg_name: PAnsiChar;
+begin
+  if hash <> nil then
+  begin
+    // EVP_MD_get0_name récupère directement le nom canonique fourni par le provider OpenSSL 3
+    alg_name := EVP_MD_get0_name(hash);
+    if alg_name <> nil then
+      writeln(strpas(alg_name))
+    else
+      writeln(strpas(OBJ_nid2sn(EVP_MD_type(hash)))); // Fallback si besoin
+  end;
+end;
+
 function list_hashes:boolean;
 begin
   result:=false;
   log('list_hashes');
-  EVP_MD_do_all_sorted (@hashes_sorted, nil);
+  //EVP_MD_do_all_sorted (@hashes_sorted, nil);
+  EVP_MD_do_all_provided(nil, @hashes_provided, nil);
   result:=true;
 end;
 
@@ -2396,7 +2447,7 @@ const
 var
   context: PEVP_CIPHER_CTX;
   cipher: PEVP_CIPHER;
-  buffer: array [0..EVP_MAX_MD_SIZE - 1] of byte;
+  buffer: array of byte;
   buffer_len: cardinal;
   i: byte;
   ret, remain: integer;
@@ -2418,7 +2469,8 @@ begin
     exit;
   end;
 
-  cipher := EVP_get_cipherbyname(pchar(algo));
+  //cipher := EVP_get_cipherbyname(pchar(algo));
+  cipher := EVP_CIPHER_fetch(nil, PAnsiChar(AnsiString(algo)), nil);
   if cipher = nil then
   begin
     writeln('cipher=nil');
@@ -2435,6 +2487,15 @@ begin
     write('key:');
     for i := 0 to length(key) - 1 do write(inttohex(key[i], 2));
     writeln;
+  end
+  else if EVP_CIPHER_key_length(cipher) > 0 then
+  begin
+    writeln('random key');
+    SetLength(key, EVP_CIPHER_key_length(cipher));
+    RAND_bytes(@key[0], length(key));
+    write('key:');
+    for i := 0 to length(key) - 1 do write(inttohex(key[i], 2));
+    writeln;
   end;
 
   // IV was supplied
@@ -2444,24 +2505,11 @@ begin
     write('iv:');
     for i := 0 to length(iv) - 1 do write(inttohex(iv[i], 2));
     writeln;
-  end;
-
-  // A key was NOT supplied: use a random key
-  if (EVP_CIPHER_CTX_key_length(context) > 0) and (keystr = '') then
-  begin
-    writeln('random key');
-    SetLength(key, EVP_CIPHER_CTX_key_length(context));
-    RAND_bytes(@key[0], length(key));
-    write('key:');
-    for i := 0 to length(key) - 1 do write(inttohex(key[i], 2));
-    writeln;
-  end;
-
-  // Random IV
-  if (EVP_CIPHER_CTX_iv_length(context) > 0) and (ivstr = '') then
+  end
+  else if EVP_CIPHER_iv_length(cipher) > 0 then
   begin
     writeln('random iv');
-    SetLength(iv, EVP_CIPHER_CTX_iv_length(context));
+    SetLength(iv, EVP_CIPHER_iv_length(cipher));
     RAND_bytes(@iv[0], length(iv));
     write('iv:');
     for i := 0 to length(iv) - 1 do write(inttohex(iv[i], 2));
@@ -2469,19 +2517,19 @@ begin
   end;
 
   log('***********************************');
-  log('key_length:' + inttostr(EVP_CIPHER_CTX_key_length(context)));
-  log('iv_length:' + inttostr(EVP_CIPHER_CTX_iv_length(context)));
+  log('key_length:' + inttostr(EVP_CIPHER_key_length(cipher)));
+  log('iv_length:' + inttostr(EVP_CIPHER_iv_length(cipher)));
   log('block_size:' + inttostr(EVP_CIPHER_block_size(cipher)));
   log('***********************************');
 
-  if length(key) <> EVP_CIPHER_CTX_key_length(context) then
+  if length(key) <> EVP_CIPHER_key_length(cipher) then
   begin
     writeln('key length incorrect:' + inttostr(length(key)));
     EVP_CIPHER_CTX_free(context);
     exit;
   end;
 
-  if (EVP_CIPHER_CTX_iv_length(context) > 0) and (length(iv) <> EVP_CIPHER_CTX_iv_length(context)) then
+  if (EVP_CIPHER_iv_length(cipher) > 0) and (length(iv) <> EVP_CIPHER_iv_length(cipher)) then
   begin
     writeln('iv length incorrect:' + inttostr(length(iv)));
     EVP_CIPHER_CTX_free(context);
@@ -2489,7 +2537,7 @@ begin
   end;
 
   log('EVP_CipherInit_ex');
-  if EVP_CIPHER_CTX_iv_length(context) > 0 then
+  if EVP_CIPHER_iv_length(cipher) > 0 then
     ret := EVP_CipherInit_ex(context, cipher, nil, @key[0], @iv[0], enc)
   else
     ret := EVP_CipherInit_ex(context, cipher, nil, @key[0], nil, enc);
@@ -2501,6 +2549,7 @@ begin
   end;
 
   log('EVP_CipherUpdate');
+  SetLength(buffer, Length(input) + EVP_CIPHER_block_size(cipher) + 16);
   if enc = 0 then
   begin
     encrypted := HexaStringToByte2(input);
@@ -2526,6 +2575,7 @@ begin
   inc(buffer_len, remain);
 
   log('EVP_CIPHER_CTX_free');
+  EVP_CIPHER_free(cipher);
   EVP_CIPHER_CTX_free(context);
 
   if buffer_len <= 0 then
@@ -2557,7 +2607,8 @@ begin
    result:=false;
    context := EVP_MD_CTX_create();
 
-   md:=EVP_get_digestbyname(pchar(algo));
+   //md:=EVP_get_digestbyname(pchar(algo));
+   md:=EVP_MD_fetch(nil, PAnsiChar(AnsiString(algo)), nil);
 
    if md=nil then
    begin
@@ -2571,6 +2622,8 @@ begin
    EVP_DigestInit(context,md);
    EVP_DigestUpdate(context, @input[0], length(input));
    EVP_DigestFinal(context, @digest[0], @digest_len);
+   //
+   EVP_MD_free(md);
    EVP_MD_CTX_destroy (context);
 
    if digest_len<=0 then exit;
@@ -2734,7 +2787,8 @@ begin
     // Type de clé
     PInteger(@buf[offset])^ := htonl(key_type_len);
     Inc(offset, SizeOf(Integer));
-    Move(key_type[1], buf[offset], key_type_len);
+    //Move(key_type[1], buf[offset], key_type_len);
+    Move(key_type[0], buf[offset], key_type_len);
     Inc(offset, key_type_len);
 
     // Exposant e (BN_bn2binpad gère automatiquement le préfixe 0x00 si e_len > e_bin_len)
@@ -2878,6 +2932,68 @@ begin
       if bio_b64 <> nil then BIO_free(bio_b64);
       if bio_mem <> nil then BIO_free(bio_mem);
     end;
+  end;
+end;
+
+// Vérifie un certificat (cert_path) par rapport à une Autorité de Certification (ca_path)
+function verify_certificate(const cert_path, ca_path: string): boolean;
+var
+  store: PX509_STORE;
+  cert_bio, ca_bio: PBIO;
+  cert, ca_cert: PX509;
+  store_ctx: PX509_STORE_CTX;
+  ret: Integer;
+begin
+  Result := False;
+  store := nil;
+  cert := nil;
+  ca_cert := nil;
+  store_ctx := nil;
+
+  // 1. Création du magasin de certificats (X509_STORE)
+  store := X509_STORE_new();
+  if store = nil then Exit;
+
+  try
+    // 2. Chargement du certificat de la CA (Trusted Root)
+    ca_bio := BIO_new_file(PAnsiChar(AnsiString(ca_path)), 'r');
+    if ca_bio <> nil then
+    begin
+      ca_cert := PEM_read_bio_X509(ca_bio, nil, nil, nil);
+      BIO_free(ca_bio);
+      if ca_cert <> nil then
+      begin
+        X509_STORE_add_cert(store, ca_cert);
+        X509_free(ca_cert);
+        ca_cert := nil;
+      end;
+    end;
+
+    // 3. Chargement du certificat à vérifier
+    cert_bio := BIO_new_file(PAnsiChar(AnsiString(cert_path)), 'r');
+    if cert_bio = nil then Exit;
+    cert := PEM_read_bio_X509(cert_bio, nil, nil, nil);
+    BIO_free(cert_bio);
+    if cert = nil then Exit;
+
+    // 4. Initialisation du contexte de validation
+    store_ctx := X509_STORE_CTX_new();
+    if store_ctx = nil then Exit;
+
+    if X509_STORE_CTX_init(store_ctx, store, cert, nil) = 1 then
+    begin
+      // 5. Exécution de la vérification cryptographique et des dates
+      ret := X509_verify_cert(store_ctx);
+      Result := (ret = 1);
+
+      if not Result then
+        writeln('Erreur de vérification: ', X509_verify_cert_error_string(X509_STORE_CTX_get_error(store_ctx)));
+    end;
+
+  finally
+    if store_ctx <> nil then X509_STORE_CTX_free(store_ctx);
+    if cert <> nil then X509_free(cert);
+    if store <> nil then X509_STORE_free(store);
   end;
 end;
 

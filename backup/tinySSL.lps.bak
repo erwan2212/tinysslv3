@@ -40,12 +40,12 @@
         </CompilerOptions>
       </Item1>
     </BuildModes>
-    <Units Count="17">
+    <Units Count="15">
       <Unit0>
         <Filename Value="tinySSL.lpr"/>
         <IsPartOfProject Value="True"/>
-        <TopLine Value="157"/>
-        <CursorPos X="163" Y="156"/>
+        <TopLine Value="137"/>
+        <CursorPos X="49" Y="541"/>
         <UsageCount Value="219"/>
         <Loaded Value="True"/>
       </Unit0>
@@ -59,8 +59,8 @@
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
         <EditorIndex Value="2"/>
-        <TopLine Value="2755"/>
-        <CursorPos X="5" Y="2788"/>
+        <TopLine Value="2493"/>
+        <CursorPos X="21" Y="2510"/>
         <UsageCount Value="219"/>
         <Loaded Value="True"/>
       </Unit2>
@@ -78,221 +78,208 @@
         <EditorIndex Value="-1"/>
         <TopLine Value="76"/>
         <CursorPos X="37" Y="93"/>
-        <UsageCount Value="191"/>
+        <UsageCount Value="187"/>
       </Unit4>
       <Unit5>
         <Filename Value="OpenSSL.Api_11.pas"/>
         <EditorIndex Value="-1"/>
         <TopLine Value="4"/>
         <CursorPos X="2" Y="28"/>
-        <UsageCount Value="82"/>
+        <UsageCount Value="78"/>
       </Unit5>
       <Unit6>
-        <Filename Value="headersWithLegacySupport\3.0.20\OpenSSLAPI.pas"/>
-        <EditorIndex Value="-1"/>
-        <TopLine Value="899"/>
-        <CursorPos X="30" Y="918"/>
-        <UsageCount Value="3"/>
-      </Unit6>
-      <Unit7>
-        <Filename Value="headersWithLegacySupport\3.0.20\openssl_x509v3.pas"/>
-        <EditorIndex Value="-1"/>
-        <TopLine Value="2771"/>
-        <CursorPos X="47" Y="2800"/>
-        <UsageCount Value="3"/>
-      </Unit7>
-      <Unit8>
-        <Filename Value="headersWithLegacySupport\3.0.20\openssl_stack.pas"/>
-        <EditorIndex Value="-1"/>
-        <TopLine Value="56"/>
-        <CursorPos X="79" Y="79"/>
-        <UsageCount Value="2"/>
-      </Unit8>
-      <Unit9>
         <Filename Value="headers\3.0.20\openssl_x509v3.pas"/>
-        <EditorIndex Value="7"/>
+        <EditorIndex Value="8"/>
         <TopLine Value="2767"/>
         <CursorPos X="29" Y="2795"/>
         <UsageCount Value="134"/>
         <Loaded Value="True"/>
-      </Unit9>
-      <Unit10>
+      </Unit6>
+      <Unit7>
         <Filename Value="headers\3.0.20\openssl_defines.inc"/>
-        <EditorIndex Value="9"/>
-        <TopLine Value="40"/>
-        <CursorPos Y="58"/>
+        <EditorIndex Value="10"/>
+        <TopLine Value="32"/>
+        <CursorPos X="16" Y="57"/>
         <UsageCount Value="134"/>
         <Loaded Value="True"/>
-      </Unit10>
-      <Unit11>
+      </Unit7>
+      <Unit8>
         <Filename Value="headers\3.0.20\openssl_stack.pas"/>
-        <EditorIndex Value="10"/>
+        <EditorIndex Value="11"/>
         <TopLine Value="55"/>
         <CursorPos X="85" Y="72"/>
         <UsageCount Value="134"/>
         <Loaded Value="True"/>
-      </Unit11>
-      <Unit12>
+      </Unit8>
+      <Unit9>
         <Filename Value="headers\3.0.20\OpenSSLAPI.pas"/>
-        <EditorIndex Value="6"/>
+        <EditorIndex Value="7"/>
         <TopLine Value="74"/>
         <CursorPos X="3" Y="87"/>
         <UsageCount Value="133"/>
         <Loaded Value="True"/>
-      </Unit12>
-      <Unit13>
+      </Unit9>
+      <Unit10>
         <Filename Value="headers\3.0.20\openssl_conf.pas"/>
-        <EditorIndex Value="8"/>
+        <EditorIndex Value="9"/>
         <TopLine Value="35"/>
         <CursorPos X="11" Y="53"/>
         <UsageCount Value="133"/>
         <Loaded Value="True"/>
-      </Unit13>
-      <Unit14>
+      </Unit10>
+      <Unit11>
         <Filename Value="headers\3.0.20\openssl_evp.pas"/>
-        <EditorIndex Value="3"/>
+        <EditorIndex Value="4"/>
         <TopLine Value="3712"/>
         <CursorPos X="55" Y="3729"/>
         <UsageCount Value="133"/>
         <Loaded Value="True"/>
-      </Unit14>
-      <Unit15>
+      </Unit11>
+      <Unit12>
         <Filename Value="headers\3.0.20\openssl_x509.pas"/>
-        <EditorIndex Value="5"/>
+        <EditorIndex Value="6"/>
         <TopLine Value="3372"/>
         <CursorPos X="12" Y="3389"/>
         <UsageCount Value="132"/>
         <Loaded Value="True"/>
-      </Unit15>
-      <Unit16>
+      </Unit12>
+      <Unit13>
         <Filename Value="headers\3.0.20\openssl_types.pas"/>
-        <EditorIndex Value="4"/>
+        <EditorIndex Value="5"/>
         <TopLine Value="458"/>
         <CursorPos X="5" Y="476"/>
         <UsageCount Value="128"/>
         <Loaded Value="True"/>
-      </Unit16>
+      </Unit13>
+      <Unit14>
+        <Filename Value="headers\3.0.20\openssl_store.pas"/>
+        <EditorIndex Value="3"/>
+        <TopLine Value="34"/>
+        <CursorPos X="48" Y="27"/>
+        <UsageCount Value="10"/>
+        <Loaded Value="True"/>
+      </Unit14>
     </Units>
     <JumpHistory Count="30" HistoryIndex="29">
       <Position1>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="900" Column="31" TopLine="872"/>
+        <Filename Value="tinySSL.lpr"/>
+        <Caret Line="463" Column="38" TopLine="446"/>
       </Position1>
       <Position2>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1067" Column="14" TopLine="1039"/>
+        <Caret Line="37" Column="16" TopLine="20"/>
       </Position2>
       <Position3>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1070" Column="14" TopLine="1048"/>
+        <Caret Line="1117" Column="9" TopLine="1089"/>
       </Position3>
       <Position4>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1074" Column="14" TopLine="1048"/>
+        <Caret Line="1193" Column="33" TopLine="1169"/>
       </Position4>
       <Position5>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1081" Column="43" TopLine="1053"/>
+        <Caret Line="18" Column="13"/>
       </Position5>
       <Position6>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="967" Column="5" TopLine="934"/>
+        <Caret Line="1198" Column="13" TopLine="1181"/>
       </Position6>
       <Position7>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="966" Column="5" TopLine="933"/>
+        <Caret Line="2788" Column="5" TopLine="2755"/>
       </Position7>
       <Position8>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="937" Column="51" TopLine="920"/>
+        <Caret Line="2882" Column="5" TopLine="2849"/>
       </Position8>
       <Position9>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="948" Column="47" TopLine="931"/>
+        <Caret Line="2803" Column="59" TopLine="2795"/>
       </Position9>
       <Position10>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="905" Column="33" TopLine="913"/>
+        <Caret Line="2811" Column="90" TopLine="2794"/>
       </Position10>
       <Position11>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="944" Column="35" TopLine="927"/>
+        <Caret Line="2797" Column="35" TopLine="2779"/>
       </Position11>
       <Position12>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="911" Column="72" TopLine="949"/>
+        <Caret Line="2811" Column="80" TopLine="2795"/>
       </Position12>
       <Position13>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1165" Column="9" TopLine="1132"/>
+        <Caret Line="2945" Column="5" TopLine="2912"/>
       </Position13>
       <Position14>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1058" Column="3" TopLine="1039"/>
+        <Caret Line="2901" Column="16" TopLine="2884"/>
       </Position14>
       <Position15>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1057" Column="11" TopLine="1040"/>
+        <Caret Line="32" Column="17"/>
       </Position15>
       <Position16>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="1058" Column="35" TopLine="1041"/>
+        <Filename Value="headers\3.0.20\openssl_defines.inc"/>
+        <Caret Line="58" Column="42" TopLine="47"/>
       </Position16>
       <Position17>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1159" Column="17" TopLine="1142"/>
+        <Caret Line="2902" Column="26" TopLine="19"/>
       </Position17>
       <Position18>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1160" Column="24" TopLine="1142"/>
+        <Caret Line="2903" Column="14" TopLine="2885"/>
       </Position18>
       <Position19>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="966" Column="5" TopLine="933"/>
+        <Filename Value="tinySSL.lpr"/>
+        <Caret Line="549" Column="7" TopLine="515"/>
       </Position19>
       <Position20>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="7" Column="84"/>
+        <Caret Line="7" Column="57"/>
       </Position20>
       <Position21>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1063" Column="34" TopLine="1035"/>
+        <Caret Line="887" Column="22" TopLine="862"/>
       </Position21>
       <Position22>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1037" Column="21" TopLine="1030"/>
+        <Caret Line="888" Column="22" TopLine="862"/>
       </Position22>
       <Position23>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1182" Column="34" TopLine="1161"/>
+        <Caret Line="891" Column="20" TopLine="863"/>
       </Position23>
       <Position24>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1052" Column="13" TopLine="1016"/>
+        <Caret Line="2017" Column="27" TopLine="1998"/>
       </Position24>
       <Position25>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="463" Column="38" TopLine="446"/>
+        <Filename Value="opensslutils.pas"/>
+        <Caret Line="2240" Column="29" TopLine="2212"/>
       </Position25>
       <Position26>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="37" Column="16" TopLine="20"/>
+        <Caret Line="2707" Column="30" TopLine="2679"/>
       </Position26>
       <Position27>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1117" Column="9" TopLine="1089"/>
+        <Caret Line="2716" Column="30" TopLine="2688"/>
       </Position27>
       <Position28>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1193" Column="33" TopLine="1169"/>
+        <Caret Line="888" Column="22" TopLine="871"/>
       </Position28>
       <Position29>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="18" Column="13"/>
+        <Caret Line="2510" Column="82" TopLine="2487"/>
       </Position29>
       <Position30>
         <Filename Value="opensslutils.pas"/>
-        <Caret Line="1198" Column="13" TopLine="1181"/>
+        <Caret Line="2402" Column="17" TopLine="2381"/>
       </Position30>
     </JumpHistory>
   </ProjectSession>
