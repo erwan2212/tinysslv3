@@ -59,6 +59,8 @@ tinySSL.exe --mkreq --debug=true --filename=request.csr --privatekey=request.key
 rem recreate, not renew<br/>
 rem tinySSL.exe --mkreq --debug=true --filename=request.csr<br/>
 tinySSL.exe --signreq --debug=true --alt="DNS:*.groupe.fr" --password=password --filename=request.csr --cert=ca.crt<br/>
+rem lets make a fullchain cert, if needed<br/>
+copy request.crt + ca.crt fullchain.crt<br/>
 rem test the cert chain<br/>
 tinySSL.exe --verify --cert=ca.crt --filename=request.crt<br/>
 <br/>
