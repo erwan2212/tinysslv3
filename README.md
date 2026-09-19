@@ -59,10 +59,12 @@ tinySSL.exe --mkreq --debug=true --filename=request.csr --privatekey=request.key
 rem recreate, not renew<br/>
 rem tinySSL.exe --mkreq --debug=true --filename=request.csr<br/>
 tinySSL.exe --signreq --debug=true --alt="DNS:*.groupe.fr" --password=password --filename=request.csr --cert=ca.crt<br/>
+rem test the cert chain<br/>
+tinySSL.exe --verify --cert=ca.crt --filename=request.crt<br/>
 <br/>
 Example : turn a cert file (pem format) into a pfx<br/>
 tinyssl --pemtop12 --cert=request.crt --privatekey=request.key<br/>
-Back to crt<br/>
+rem Back to crt<br/>
 tinyssl --p12topem --cert=request.pfx</br>
 </br>
 Exemple to generate a public/private key pair and convert into into a open ssh key for ssh purpose:<br/>
