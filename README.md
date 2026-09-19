@@ -25,6 +25,8 @@ The following command line options are valid:<br/>
 --print_private         print cert details from privatekey<br/>
 --print_request         print request details from filename<br/>
 --print_sshkey          print an openssh key from filename<br/>
+--dhparam               generate dhparam from filename<br/>
+--rand                  Generate secure random hex<br/>
 --genkey                generate rsa keys public.pem and private.pem<br/>
 --hash                  hash password, using algo<br/>
 --base64encode          encode password to base64<br/>
