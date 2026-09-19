@@ -83,12 +83,13 @@ type TC_INT   = LongInt;
 
 implementation
 
+{
 const
   NID_subject_key_identifier  = 82;
   NID_key_usage               = 83;
   NID_basic_constraints       = 87;
   NID_ext_key_usage           = 180;
-
+}
 
   function LoadSSL: Boolean;
   var

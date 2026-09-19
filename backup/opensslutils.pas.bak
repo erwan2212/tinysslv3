@@ -30,6 +30,7 @@ uses
   openssl_crypto,
   openssl_rand,
   openssl_conf,
+  openssl_provider,
   openssl_err;
 
 function LoadSSL: Boolean;
