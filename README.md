@@ -64,9 +64,13 @@ tinySSL.exe --signreq --debug=true --alt="DNS:*.groupe.fr" --password=password -
 Example : turn a cert file (pem format) into a pfx<br/>
 tinyssl --pemtop12 --cert=request.crt --privatekey=request.key<br/>
 Back to crt<br/>
-tinyssl --p12topem --cert=request.pfx
+tinyssl --p12topem --cert=request.pfx</br>
+</br>
 Exemple to generate a public/private key pair and convert into into a open ssh key for ssh purpose:<br/>
 tinySSL.exe --genkey<br/>
-tinyssl --print_sshkey --filename=public.pem<br/>
+tinyssl.exe --print_sshkey --filename=public.pem<br/>
+rem now copy your ssh key to your ssh servers authorized_keys</br>
+icacls private.pem /inheritance:r<br/>
+icacls private.pem /grant:r "%USERNAME%:F"<br/>
 ssh -i private.pem erwan@192.168.1.238<br/>
 
