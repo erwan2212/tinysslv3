@@ -1351,7 +1351,10 @@ begin
 
     value := ini_readstring('cert_ext', 'ext_key_usage');
     if value <> '' then
-    add_ext(x509, NID_key_usage, value);
+       begin
+       log('NID_ext_key_usage=' + IntToStr(NID_ext_key_usage) + ' value=' + value);
+       add_ext(x509, NID_ext_key_usage, value);
+       end;
 
     { =========================================================
       8. Signature du certificat avec SHA-256

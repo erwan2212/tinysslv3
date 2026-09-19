@@ -83,12 +83,13 @@ type TC_INT   = LongInt;
 
 implementation
 
+{
 const
   NID_subject_key_identifier  = 82;
   NID_key_usage               = 83;
   NID_basic_constraints       = 87;
   NID_ext_key_usage           = 180;
-
+}
 
   function LoadSSL: Boolean;
   var
@@ -1350,7 +1351,8 @@ begin
 
     value := ini_readstring('cert_ext', 'ext_key_usage');
     if value <> '' then
-    add_ext(x509, NID_key_usage, value);
+    //add_ext(x509, NID_key_usage, value);
+    add_ext(x509, NID_ext_key_usage, value);
 
     { =========================================================
       8. Signature du certificat avec SHA-256
