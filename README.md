@@ -74,8 +74,9 @@ tinyssl --p12topem --cert=request.pfx</br>
 Exemple to generate a public/private key pair and convert into into a open ssh key for ssh purpose:<br/>
 tinySSL.exe --genkey<br/>
 tinyssl.exe --print_sshkey --filename=public.pem<br/>
-rem now copy your ssh key to your ssh servers authorized_keys</br>
+rem now copy your ssh pub key to your ssh server authorized_keys</br>
+rem lets secure the local windows private key</br>
 icacls private.pem /inheritance:r<br/>
 icacls private.pem /grant:r "%USERNAME%:F"<br/>
-ssh -i private.pem erwan@192.168.1.238<br/>
+ssh -i private.pem username@ip<br/>
 
