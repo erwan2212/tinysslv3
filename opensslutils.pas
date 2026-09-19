@@ -29,6 +29,7 @@ uses
   openssl_obj_mac,   // Pour les constantes NID_*
   openssl_crypto,
   openssl_rand,
+  openssl_dh,
   openssl_conf,
   openssl_provider,
   openssl_err;
@@ -76,6 +77,10 @@ function getTime(asn1_time: pASN1_TIME): TDateTime;
 function getSerialNumber(x509:px509): String;
 
 function PrintSSHKey(filename:string):boolean;
+
+function GenerateDHParam(const filename: string; bits: integer = 2048): boolean;
+function GenerateSecureRandomHex(numBytes: integer = 32): string;
+
 
 type PCharacter = PAnsiChar;
 type pSTACK_OFX509 = pointer;
@@ -3146,6 +3151,93 @@ begin
     if store_ctx <> nil then X509_STORE_CTX_free(store_ctx);
     if cert <> nil then X509_free(cert);
     if store <> nil then X509_STORE_free(store);
+  end;
+end;
+
+function GenerateSecureRandomHex(numBytes: integer = 32): string;
+var
+  buf: PByte;
+  i: integer;
+  hexStr: AnsiString;
+begin
+  Result := '';
+  if numBytes <= 0 then Exit;
+
+  // Allocation d'un buffer pour stocker les octets bruts
+  GetMem(buf, numBytes);
+  try
+    // Utilisation du CSPRNG d'OpenSSL (garantit l'aléa cryptographique)
+    if RAND_bytes(buf, numBytes) <> 1 then
+    begin
+      writeln('Erreur: Échec de la génération d''aléas cryptographiques via RAND_bytes');
+      Exit;
+    end;
+
+    // Conversion des octets bruts en chaîne hexadécimale
+    SetLength(hexStr, numBytes * 2);
+    for i := 0 to numBytes - 1 do
+    begin
+      hexStr[(i * 2) + 1] := PAnsiChar(IntToHex(buf[i], 2))[0];
+      hexStr[(i * 2) + 2] := PAnsiChar(IntToHex(buf[i], 2))[1];
+    end;
+
+    Result := string(hexStr);
+  finally
+    FreeMem(buf);
+  end;
+end;
+
+function GenerateDHParam(const filename: string; bits: integer = 2048): boolean;
+var
+  bp: pBIO;
+  dh: pDH;
+  ctx: pOSSL_ENCODER_CTX; // Pour OpenSSL 3.0+ (ou méthode classique via DH)
+begin
+  Result := false;
+  bp := nil;
+  dh := nil;
+
+  // 1. Génération des paramètres DH (méthode compatible OpenSSL 3.x / 1.1.1)
+  // Note: En OpenSSL 3.0, on utilise souvent EVP_PKEY_gen via les paramètres EVP_PKEY_DH,
+  // mais la structure DH historique reste largement supportée via les wrappers de compatibilité.
+  dh := DH_new();
+  if dh = nil then
+  begin
+    writeln('Erreur: Allocation de la structure DH échouée');
+    Exit;
+  end;
+
+  try
+    writeln('Génération des paramètres DH (' + IntToStr(bits) + ' bits)... Veuillez patienter...');
+
+    // Génération synchrone avec un générateur par défaut (exposant générateur 2)
+    if DH_generate_parameters_ex(dh, bits, DH_GENERATOR_2, nil) <> 1 then
+    begin
+      writeln('Erreur: Échec de la génération des paramètres DH');
+      Exit;
+    end;
+
+    // 2. Ouverture du fichier de sortie PEM
+    bp := BIO_new_file(PAnsiChar(AnsiString(filename)), 'w');
+    if bp = nil then
+    begin
+      writeln('Erreur: Impossible de créer le fichier de sortie: ', filename);
+      Exit;
+    end;
+
+    // 3. Écriture au format PEM
+    if PEM_write_bio_DHparams(bp, dh) <> 1 then
+    begin
+      writeln('Erreur: Écriture des paramètres DH dans le fichier échouée');
+      Exit;
+    end;
+
+    writeln('Paramètres DH générés et sauvegardés avec succès dans : ', filename);
+    Result := true;
+
+  finally
+    if bp <> nil then BIO_free(bp);
+    if dh <> nil then DH_free(dh);
   end;
 end;
 

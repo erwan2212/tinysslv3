@@ -133,11 +133,15 @@ begin
   //
   cmd.declareflag('s_client', 'will retrieve ssl information from remote host, cn=host');
   //
+  // Dans la déclaration des flags :
+  cmd.declareflag('verify', 'verify a certificate against a ca cert (use cert and filename)');
   cmd.declareflag('print_cert', 'print cert details from cert');
   cmd.declareflag('print_private', 'print cert details from privatekey');
   cmd.declareflag('print_request', 'print request details from filename');
   cmd.declareflag('print_sshkey', 'print an openssh key from filename');
 
+  cmd.declareflag('dhparam', 'generate dhparam from filename ');
+  cmd.declareflag('rand', 'Generate secure random hex');
 
   cmd.declareflag('genkey', 'generate rsa keys public.pem and private.pem');
   cmd.declareflag('hash', 'hash password, using algo');
@@ -523,6 +527,29 @@ begin
     end;
     }
 
+    // Dans la gestion des conditions :
+  if cmd.existsProperty('verify') = true then
+  begin
+    try
+      LoadSSL;
+      cert := cmd.readString('cert');      // ex: ca.crt
+      filename := cmd.readString('filename'); // ex: server.crt
+      if (cert = '') or (filename = '') then
+      begin
+        writeln('Erreur: --cert et --filename sont requis.');
+        exit;
+      end;
+
+      if verify_certificate(filename, cert) then
+        writeln('ok (Certificat valide)')
+      else
+        writeln('not ok (Certificat invalide ou chaîne non brisée)');
+    finally
+      FreeSSL;
+    end;
+    exit;
+  end;
+
     if cmd.existsProperty('print_cert')=true then
     begin
     try
@@ -577,6 +604,31 @@ begin
     end;
     exit;
     end;
+
+    if cmd.existsProperty('dhparam')=true then
+    begin
+    try
+    LoadSSL;
+    filename:=cmd.readString('filename');
+    if not fileexists(filename) then exit;
+    if GenerateDHParam(filename)=true then writeln('ok') else writeln('not ok');
+    finally
+    FreeSSL;
+    end;
+    exit;
+    end;
+
+    if cmd.existsProperty('rand')=true then
+    begin
+    try
+    LoadSSL;
+    writeln(GenerateSecureRandomHex());
+    finally
+    FreeSSL;
+    end;
+    exit;
+    end;
+
 
 end.
 

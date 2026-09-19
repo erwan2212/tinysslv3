@@ -140,6 +140,8 @@ begin
   cmd.declareflag('print_request', 'print request details from filename');
   cmd.declareflag('print_sshkey', 'print an openssh key from filename');
 
+  cmd.declareflag('dhparam', 'generate dhparam from filename ');
+  cmd.declareflag('rand', 'Generate secure random hex');
 
   cmd.declareflag('genkey', 'generate rsa keys public.pem and private.pem');
   cmd.declareflag('hash', 'hash password, using algo');
@@ -602,6 +604,30 @@ begin
     end;
     exit;
     end;
+
+    if cmd.existsProperty('dhparam')=true then
+    begin
+    try
+    LoadSSL;
+    filename:=cmd.readString('filename');
+    if GenerateDHParam(filename)=true then writeln('ok') else writeln('not ok');
+    finally
+    FreeSSL;
+    end;
+    exit;
+    end;
+
+    if cmd.existsProperty('rand')=true then
+    begin
+    try
+    LoadSSL;
+    writeln(GenerateSecureRandomHex());
+    finally
+    FreeSSL;
+    end;
+    exit;
+    end;
+
 
 end.
 

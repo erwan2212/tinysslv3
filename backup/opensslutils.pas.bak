@@ -29,6 +29,7 @@ uses
   openssl_obj_mac,   // Pour les constantes NID_*
   openssl_crypto,
   openssl_rand,
+  openssl_dh,
   openssl_conf,
   openssl_provider,
   openssl_err;
@@ -1886,8 +1887,8 @@ var
   req: pX509_REQ;
   name: pX509_NAME;
   key: pEVP_PKEY;
-  bio_mem, bio_base64: pBIO;
-  data: array [0..4095] of char;
+  bio_mem, bio_base64, bioChain: pBIO;
+  pemData: AnsiString;
   key_buf, key_buf_orig, pb: pbyte;
   digest: array [0..EVP_MAX_MD_SIZE - 1] of byte;
   key_len, size: cardinal;
@@ -1900,6 +1901,7 @@ begin
   key := nil;
   bio_mem := nil;
   bio_base64 := nil;
+  bioChain := nil;
   key_buf := nil;
   key_buf_orig := nil;
 
@@ -1942,27 +1944,30 @@ begin
       Exit;
     end;
 
-    // On pousse bio_mem dans bio_base64 (ou l'inverse selon votre configuration de chaînage)
-    // Ici on respecte votre logique de chaînage
-    BIO_push(bio_base64, bio_mem);
-    bio_mem := nil; // appartient maintenant à la chaîne bio_base64
-    PEM_write_bio_PUBKEY(bio_base64, key);
-    BIO_flush(bio_base64);
+    bioChain := BIO_push(bio_base64, bio_mem);
+    bio_base64 := nil; // appartient maintenant à la chaîne bioChain
 
-    //b64len := BIO_read(bio_base64, @data[0], sizeof(data) - 1);
-    b64len := BIO_read(bio_mem, @data[0], sizeof(data)-1);  // ← doit être bio_mem
-    writeln();
+    PEM_write_bio_PUBKEY(bioChain, key);
+    BIO_flush(bioChain);
 
+    // Lecture dynamique via BIO_pending sur bio_mem
+    b64len := BIO_pending(bio_mem);
     if b64len > 0 then
     begin
-      data[b64len] := #0;
+      SetLength(pemData, b64len);
+      BIO_read(bio_mem, @pemData[1], b64len);
+      writeln();
       writeln('Public key base64:');
-      writeln(data);
+      writeln(string(pemData));
     end
     else
     begin
       writeln('Erreur lors de la lecture de la clé en base64');
     end;
+
+    BIO_free_all(bioChain);
+    bioChain := nil;
+    bio_mem := nil;
 
     // Extraction de la clé au format DER (i2d_PUBKEY modifie le pointeur passé en paramètre)
     key_len := i2d_PUBKEY(key, nil);
@@ -1992,14 +1997,16 @@ begin
     Result := True;
 
   finally
-    // Nettoyage rigoureux des ressources allouées (ordre inverse ou sécurisé)
+    // Nettoyage rigoureux des ressources allouées
     if key_buf_orig <> nil then
       FreeMem(key_buf_orig);
 
     if bio_base64 <> nil then
-      BIO_free_all(bio_base64) // Libère la chaîne BIO complète (inclut bio_mem)
-    else if bio_mem <> nil then
+      BIO_free(bio_base64);
+    if bio_mem <> nil then
       BIO_free(bio_mem);
+    if bioChain <> nil then
+      BIO_free_all(bioChain);
 
     if key <> nil then
       EVP_PKEY_free(key);
@@ -3140,6 +3147,93 @@ begin
     if store_ctx <> nil then X509_STORE_CTX_free(store_ctx);
     if cert <> nil then X509_free(cert);
     if store <> nil then X509_STORE_free(store);
+  end;
+end;
+
+function GenerateSecureRandomHex(numBytes: integer = 32): string;
+var
+  buf: PByte;
+  i: integer;
+  hexStr: AnsiString;
+begin
+  Result := '';
+  if numBytes <= 0 then Exit;
+
+  // Allocation d'un buffer pour stocker les octets bruts
+  GetMem(buf, numBytes);
+  try
+    // Utilisation du CSPRNG d'OpenSSL (garantit l'aléa cryptographique)
+    if RAND_bytes(buf, numBytes) <> 1 then
+    begin
+      writeln('Erreur: Échec de la génération d''aléas cryptographiques via RAND_bytes');
+      Exit;
+    end;
+
+    // Conversion des octets bruts en chaîne hexadécimale
+    SetLength(hexStr, numBytes * 2);
+    for i := 0 to numBytes - 1 do
+    begin
+      hexStr[(i * 2) + 1] := PAnsiChar(IntToHex(buf[i], 2))[0];
+      hexStr[(i * 2) + 2] := PAnsiChar(IntToHex(buf[i], 2))[1];
+    end;
+
+    Result := string(hexStr);
+  finally
+    FreeMem(buf);
+  end;
+end;
+
+function GenerateDHParam(const filename: string; bits: integer = 2048): boolean;
+var
+  bp: pBIO;
+  dh: pDH;
+  ctx: pOSSL_ENCODER_CTX; // Pour OpenSSL 3.0+ (ou méthode classique via DH)
+begin
+  Result := false;
+  bp := nil;
+  dh := nil;
+
+  // 1. Génération des paramètres DH (méthode compatible OpenSSL 3.x / 1.1.1)
+  // Note: En OpenSSL 3.0, on utilise souvent EVP_PKEY_gen via les paramètres EVP_PKEY_DH,
+  // mais la structure DH historique reste largement supportée via les wrappers de compatibilité.
+  dh := DH_new();
+  if dh = nil then
+  begin
+    writeln('Erreur: Allocation de la structure DH échouée');
+    Exit;
+  end;
+
+  try
+    writeln('Génération des paramètres DH (' + IntToStr(bits) + ' bits)... Veuillez patienter...');
+
+    // Génération synchrone avec un générateur par défaut (exposant générateur 2)
+    if DH_generate_parameters_ex(dh, bits, DH_GENERATOR_2, nil) <> 1 then
+    begin
+      writeln('Erreur: Échec de la génération des paramètres DH');
+      Exit;
+    end;
+
+    // 2. Ouverture du fichier de sortie PEM
+    bp := BIO_new_file(PAnsiChar(AnsiString(filename)), 'w');
+    if bp = nil then
+    begin
+      writeln('Erreur: Impossible de créer le fichier de sortie: ', filename);
+      Exit;
+    end;
+
+    // 3. Écriture au format PEM
+    if PEM_write_bio_DHparams(bp, dh) <> 1 then
+    begin
+      writeln('Erreur: Écriture des paramètres DH dans le fichier échouée');
+      Exit;
+    end;
+
+    writeln('Paramètres DH générés et sauvegardés avec succès dans : ', filename);
+    Result := true;
+
+  finally
+    if bp <> nil then BIO_free(bp);
+    if dh <> nil then DH_free(dh);
   end;
 end;
 
