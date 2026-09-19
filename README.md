@@ -5,6 +5,8 @@ New tinyssl but using libcrypto 3.x and https://github.com/MWASoftware/PascalAPI
 <br/>
 TinySSL, aka playing with openssl library (libeay32) for digest, cipher and certificate matters.<br/>
 <br/>
+The following command line options are valid:<br/>
+
 --cn=<string>           cn<br/>
 --alt=<string>          alternate name<br/>
 --ca=<string>           true|false (default: false)<br/>
@@ -18,9 +20,11 @@ TinySSL, aka playing with openssl library (libeay32) for digest, cipher and cert
 --debug=<string>        true|false (default: false)<br/>
 --filename=<string>     local filename<br/>
 --s_client              will retrieve ssl information from remote host, cn=host<br/>
+--verify                verify a certificate against a ca cert (use cert and filename)<br/>
 --print_cert            print cert details from cert<br/>
 --print_private         print cert details from privatekey<br/>
 --print_request         print request details from filename<br/>
+--print_sshkey          print an openssh key from filename<br/>
 --genkey                generate rsa keys public.pem and private.pem<br/>
 --hash                  hash password, using algo<br/>
 --base64encode          encode password to base64<br/>
@@ -33,17 +37,12 @@ TinySSL, aka playing with openssl library (libeay32) for digest, cipher and cert
 --fromhexa              convert a password hexa to string<br/>
 --encrypt_pub           encrypt a file using public.pem, read from filename<br/>
 --decrypt_priv          decrypt a file using private.pem, read from filename<br/>
---mkcert                make a self sign root cert, read from privatekey (option) & write to filename.crt and<br/>
-                        filename.key<br/>
---mkreq                 make a certificate service request, read from privatekey & write to filename.csr<br/>
-                        filename.key (if privatekey not specified)<br/>
+--mkcert                make a self sign root cert, read from privatekey (option) & write to filename.crt and filename.key, useds algo=EC:EC384:EC521:ED25519:RSA (default)<br/>
+--mkreq                 make a certificate service request, read from privatekey & write to filename.csr filename.key (if privatekey not specified)<br/>
 --signreq               make a certificate from a csr, read from filename and cert, write to filename.crt<br/>
---set_password          read from privatekey and creates a new private key with a different password - if no<br/>
-                        password provided, will remove the existing password<br/>
---dertopem              convert a binary/der private key or cert to base 64 pem format, read from cert or<br/>
-                        privatekey, write to cert.crt or privatekey.key<br/>
---pemtoder              convert a base 64 pem format to binary/der private key or cert, read from cert or<br/>
-                        privatekey, write to cert.der or privatekey.der<br/>
+--set_password          read from privatekey and creates a new private key with a different password - if no password provided, will remove the existing password<br/>
+--dertopem              convert a binary/der private key or cert to base 64 pem format, read from cert or privatekey, write to cert.crt or privatekey.key<br/>
+--pemtoder              convert a base 64 pem format to binary/der private key or cert, read from cert or privatekey, write to cert.der or privatekey.der<br/>
 --p12topem              convert a pfx to pem, read from cert, write to cert.crt and cert.key<br/>
 --pemtop12              convert a pem to pfx, read from cert and privatekey, write to cert.pfx<br/>
 --p7topem               convert a p7b to pem, read from cert, write to cert.crt<br/>
