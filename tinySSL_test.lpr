@@ -315,16 +315,16 @@ begin
     set_password('ca_rsa.key', 'testpassword'));
 
   // La clé chiffrée doit contenir ENCRYPTED
-  content2 := ReadFileContent('ca_rsa.key');
+  content2 := ReadFileContent('new_ca_rsa.key');
   Check('clé contient ENCRYPTED après set_password',
     Pos('ENCRYPTED', content2) > 0);
 
   // Suppression du mot de passe
   Check('set_password (suppression password)',
-    set_password('ca_rsa.key', ''));
+    set_password('new_ca_rsa.key', ''));
 
   // La clé en clair ne doit plus contenir ENCRYPTED
-  content2 := ReadFileContent('ca_rsa.key');
+  content2 := ReadFileContent('new_ca_rsa.key');
   Check('clé sans ENCRYPTED après suppression',
     Pos('ENCRYPTED', content2) = 0);
 end;
