@@ -166,7 +166,7 @@ tinySSL --print_private --key=<file> [--password=<pwd>]
 ### `--print_request` — Display CSR details
 
 ```
-tinySSL --print_request --cert=<file>
+tinySSL --print_request --csr=<file>
 ```
 
 ---
