@@ -149,7 +149,7 @@ begin
   Section('mkcert RSA (CA)');
   Cleanup(['ca_rsa.crt', 'ca_rsa.key']);
   Check('mkcert RSA CA',
-    mkcert('ca_rsa.crt', 'Test CA RSA', '', '', '', true, 'RSA'));
+    mkcert('ca_rsa.crt', 'Test CA RSA', '', 'secret', '', true, 'RSA'));
   CheckFile('ca_rsa.crt', 'ca_rsa.crt');
   CheckFile('ca_rsa.key', 'ca_rsa.key');
 end;
@@ -159,7 +159,7 @@ begin
   Section('mkcert EC P-256');
   Cleanup(['ca_ec.crt', 'ca_ec.key']);
   Check('mkcert EC CA',
-    mkcert('ca_ec.crt', 'Test CA EC', '', '', '', true, 'EC'));
+    mkcert('ca_ec.crt', 'Test CA EC', '', 'secret', '', true, 'EC'));
   CheckFile('ca_ec.crt', 'ca_ec.crt');
   CheckFile('ca_ec.key', 'ca_ec.key');
 end;
@@ -169,7 +169,7 @@ begin
   Section('mkcert EC P-384');
   Cleanup(['ca_ec384.crt', 'ca_ec384.key']);
   Check('mkcert EC384 CA',
-    mkcert('ca_ec384.crt', 'Test CA EC384', '', '', '', true, 'EC384'));
+    mkcert('ca_ec384.crt', 'Test CA EC384', '', 'secret', '', true, 'EC384'));
   CheckFile('ca_ec384.crt', 'ca_ec384.crt');
   CheckFile('ca_ec384.key', 'ca_ec384.key');
 end;
@@ -179,7 +179,7 @@ begin
   Section('mkcert ED25519');
   Cleanup(['ca_ed.crt', 'ca_ed.key']);
   Check('mkcert ED25519',
-    mkcert('ca_ed.crt', 'Test CA ED25519', '', '', '', true, 'ED25519'));
+    mkcert('ca_ed.crt', 'Test CA ED25519', '', 'secret', '', true, 'ED25519'));
   CheckFile('ca_ed.crt', 'ca_ed.crt');
   CheckFile('ca_ed.key', 'ca_ed.key');
 end;
@@ -220,7 +220,7 @@ begin
     Exit;
   end;
   Check('signreq (sans SAN)',
-    signreq('server.csr', 'ca_rsa.crt', '', '', false));
+    signreq('server.csr', 'ca_rsa.crt', 'secret', '', false));
   CheckFile('server.crt créé', 'server.crt');
 end;
 
@@ -236,7 +236,7 @@ begin
   // Nouveau CSR pour avoir un fichier propre
   mkreq('san.example.com', '', 'server2.csr');
   Check('signreq avec SAN DNS+IP',
-    signreq('server2.csr', 'ca_rsa.crt', '',
+    signreq('server2.csr', 'ca_rsa.crt', 'secret',
             'DNS:*.example.com,DNS:san.example.com,IP:127.0.0.1', false));
   // signreq écrit dans server2.crt
   CheckFile('server2.crt créé', 'server2.crt');
