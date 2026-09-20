@@ -44,8 +44,10 @@ BYTE            privateExponent[rsapubkey.bitlen/8];
 
 var
   cmd: TCommandLineReader;
-  filename,encrypted,key,algo,iv,password,privatekey,cert,cn,alt,s:string;
-  ca:boolean=false;
+  {filename,cert,}in_,out_,encrypted,key,algo,iv,password,cn,alt,s,csr,cert:string;
+  ca_val : string;
+  ca_flag : boolean = false;   // --ca seul = "ce cert est une CA"
+  ca_cert : string  = '';      // --ca=ca.crt = "utiliser ce fichier comme CA"
   hfile_:thandle=thandle(-1);
   mem_:array[0..8192-1] of char;
   size_:dword=0;
@@ -100,35 +102,108 @@ begin
     closehandle(hfile_);
 end;
 
+// À insérer après cmd.parse(cmdline) et avant la lecture de debug/utf16,
+// en remplacement du simple "writeln('Usage: tinySSL --help')"
+
+procedure PrintHelp;
+begin
+  writeln('tinySSL — OpenSSL 3.0 command-line tool  |  https://github.com/erwan2212');
+  writeln('');
+  writeln('CERTIFICATE COMMANDS');
+  writeln('  --mkcert      Generate a self-signed certificate');
+  writeln('                  --out=ca.crt  --cn="My CA"  --algo=RSA|EC|EC384|EC521|ED25519  --ca=true');
+  writeln('  --mkreq       Generate a Certificate Signing Request (CSR)');
+  writeln('                  --out=req.csr  --cn="www.example.com"  [--key=existing.key]');
+  writeln('  --signreq     Sign a CSR with a CA certificate');
+  writeln('                  --csr=req.csr  -cert=ca.crt [--ca=true]  [--alt="DNS:*.example.com"]  [--password=pwd]');
+  writeln('  --verify      Verify a certificate against a CA');
+  writeln('                  --cert=server.crt  --ca=ca.crt');
+  writeln('  --set_password  Change or remove private key password');
+  writeln('                  --key=server.key  [--password=newpwd]');
+  writeln('');
+  writeln('INSPECT COMMANDS');
+  writeln('  --print_cert     Print certificate details  --cert=file.crt');
+  writeln('  --print_private  Print private key details  --key=file.key  [--password=pwd]');
+  writeln('  --print_request  Print CSR details          --csr=file.csr');
+  writeln('  --print_sshkey   Print public key in OpenSSH format  --key=file.pem');
+  writeln('');
+  writeln('FORMAT CONVERSION');
+  writeln('  --p12topem    PFX/P12 → PEM         --in=cert.pfx  [--password=pwd]');
+  writeln('  --pemtop12    PEM → PFX/P12         --in=cert.crt  [--key=cert.key]  [--password=pwd]');
+  writeln('  --p7topem     P7B → PEM             --in=cert.p7b');
+  writeln('  --pemtop7     PEM → P7B             --in=cert.crt');
+  writeln('  --dertopem    DER (binary) → PEM    --in=cert.der  or  --key=priv.der');
+  writeln('  --pemtoder    PEM → DER (binary)    --in=cert.crt  or  --key=priv.key');
+  writeln('');
+  writeln('CRYPTOGRAPHY');
+  writeln('  --encrypt     Symmetric encryption  --algo=AES-256-CBC  --password=data  [--key=hex]  [--iv=hex]');
+  writeln('  --decrypt     Symmetric decryption  --algo=AES-256-CBC  --password=hex   [--key=hex]  [--iv=hex]');
+  writeln('  --encrypt_pub   RSA encrypt with public.pem   --in=file');
+  writeln('  --decrypt_priv  RSA decrypt with private.pem  --in=file');
+  writeln('  --hash        Hash data  --algo=SHA-256  --password=data');
+  writeln('  --base64encode  Encode to Base64  --password=data');
+  writeln('  --base64decode  Decode from Base64  --password=base64  [--utf16]');
+  writeln('  --tohexa      String → hex  --password=hello');
+  writeln('  --fromhexa    Hex → string  --password=68656C6C6F');
+  writeln('');
+  writeln('UTILITIES');
+  writeln('  --genkey      Generate RSA-2048 key pair (public.pem + private.pem)');
+  writeln('  --rand        Generate cryptographically secure random hex');
+  writeln('  --dhparam     Generate DH parameters  --out=dhparam.pem');
+  writeln('  --list_cipher  List all available ciphers');
+  writeln('  --list_digest  List all available digest algorithms');
+  writeln('');
+  writeln('GLOBAL OPTIONS');
+  writeln('  --password=<pwd>   Passphrase (use stdin to avoid exposure in process list)');
+  writeln('  --algo=<name>      Algorithm name');
+  writeln('  --key=<path>       Private key file or raw key (hex) for encrypt/decrypt');
+  writeln('  --cert=<path>      X.509 certificate file');
+  writeln('  --csr=<path>       Certificate Signing Request file');
+  writeln('  --in=<path>        Input file');
+  writeln('  --out=<path>       Output file');
+  writeln('  --cn=<name>        Common Name');
+  writeln('  --alt=<san>        Subject Alternative Names e.g. "DNS:*.example.com,IP:1.2.3.4"');
+  writeln('  --ca               Flag: mark as CA certificate');
+  writeln('  --ca=<path>        CA certificate path (for signreq / verify)');
+  writeln('  --iv=<hex>         IV in hex (encrypt/decrypt)');
+  writeln('  --utf16            Treat input as UTF-16 (default: false)');
+  writeln('  --debug=true       Enable verbose output');
+  writeln('');
+  writeln('WORKFLOW EXAMPLE');
+  writeln('  tinySSL --mkcert --out=ca.crt --cn="My Root CA" --ca');
+  writeln('  tinySSL --mkreq  --out=server.csr --cn="www.example.com"');
+  writeln('  tinySSL --signreq --csr=server.csr --ca=ca.crt --alt="DNS:*.example.com"');
+  writeln('  tinySSL --verify  --cert=server.crt --ca=ca.crt');
+  writeln('  tinySSL --print_cert --cert=server.crt');
+  writeln('');
+  writeln('Configuration: tinyssl.ini in current directory');
+  writeln('More info: https://github.com/erwan2212');
+end;
+
+
 begin
   //loadrsa('decoded.bin');
   //exit;
   //debug:=true;
 
-
-
-  if paramcount=0 then
-  begin
-    writeln('https://github.com/erwan2212');
-    writeln('Usage: tinySSL --help');
-    exit;
-  end;
-
   cmd := TCommandLineReader.create;
+  cmd.declareFlag('help', 'Show this help message');
   cmd.declareString('cn', 'cn');
   cmd.declareString('alt', 'alternate name');
-  cmd.declareString('ca', 'true|false','false');
+  //cmd.declareString('ca', 'true|false','false');
+  cmd.declareString('ca', 'CA flag or CA cert path (--ca or --ca=ca.crt)', '');
   cmd.declareString('password', 'password');
-  cmd.declareString('privatekey', 'path to a privatekey file');
+  cmd.declareString('key', 'path to a key file or key used for encrypt/decrypt');
   //cmd.declareString('publickey', 'path to a publickey file, not needed if you have the privatekey');
-  cmd.declareString('cert', 'path to a certificate');
   //cmd.declareString('input', 'something to be hashed');
   cmd.declareString('algo', 'use list_cipher or list_digest');
-  cmd.declareString('key', 'optional, used by decrypt/encrypt');
   cmd.declareString('iv', 'optional, used by decrypt/encrypt');
   cmd.declareString('utf16', 'true|false','false');
   cmd.declareString('debug', 'true|false','false');
-  cmd.declareString('filename', 'local filename');
+  cmd.declareString('cert', 'path to a certificate');
+  cmd.declareString('csr', 'path to certificate signing request', '');
+  cmd.declareString('in', 'path to input file');
+  cmd.declareString('out', 'path to output file');
 
   //
   cmd.declareflag('s_client', 'will retrieve ssl information from remote host, cn=host');
@@ -136,7 +211,7 @@ begin
   // Dans la déclaration des flags :
   cmd.declareflag('verify', 'verify a certificate against a ca cert (use cert and filename)');
   cmd.declareflag('print_cert', 'print cert details from cert');
-  cmd.declareflag('print_private', 'print cert details from privatekey');
+  cmd.declareflag('print_private', 'print cert details from key');
   cmd.declareflag('print_request', 'print request details from filename');
   cmd.declareflag('print_sshkey', 'print an openssh key from filename');
 
@@ -157,21 +232,27 @@ begin
   cmd.declareflag('encrypt_pub', 'encrypt a file using public.pem, read from filename');
   cmd.declareflag('decrypt_priv', 'decrypt a file using private.pem, read from filename');
 
-  cmd.declareflag('mkcert', 'make a self sign root cert, read from privatekey (option) & write to filename.crt and filename.key, useds algo=EC:EC384:EC521:ED25519:RSA (default)');
-  cmd.declareflag('mkreq', 'make a certificate service request, read from privatekey & write to filename.csr filename.key (if privatekey not specified)');
+  cmd.declareflag('mkcert', 'make a self sign root cert, read from key (option) & write to filename.crt and filename.key, useds algo=EC:EC384:EC521:ED25519:RSA (default)');
+  cmd.declareflag('mkreq', 'make a certificate service request, read from key & write to filename.csr filename.key (if key not specified)');
   cmd.declareflag('signreq', 'make a certificate from a csr, read from filename and cert, write to filename.crt');
   //cmd.declareflag('selfsign', 'make a self sign cert, write to cert.crt cert.key');
 
-  cmd.declareflag('set_password', 'read from privatekey and creates a new private key with a different password - if no password provided, will remove the existing password');
+  cmd.declareflag('set_password', 'read from key and creates a new private key with a different password - if no password provided, will remove the existing password');
 
-  cmd.declareflag('dertopem', 'convert a binary/der private key or cert to base 64 pem format, read from cert or privatekey, write to cert.crt or privatekey.key ');
-  cmd.declareflag('pemtoder', 'convert a base 64 pem format to binary/der private key or cert, read from cert or privatekey, write to cert.der or privatekey.der ');
+  cmd.declareflag('dertopem', 'convert a binary/der private key or cert to base 64 pem format, read from cert or key, write to cert.crt or privatekey.key ');
+  cmd.declareflag('pemtoder', 'convert a base 64 pem format to binary/der private key or cert, read from cert or key, write to cert.der or privatekey.der ');
   cmd.declareflag('p12topem', 'convert a pfx to pem, read from cert, write to cert.crt and cert.key');
-  cmd.declareflag('pemtop12', 'convert a pem to pfx, read from cert and privatekey, write to cert.pfx');
+  cmd.declareflag('pemtop12', 'convert a pem to pfx, read from cert and key, write to cert.pfx');
   cmd.declareflag('p7topem', 'convert a p7b to pem, read from cert, write to cert.crt');
   cmd.declareflag('pemtop7', 'convert a pem to p7b, read from cert, write to cert.p7b');
   //
   cmd.parse(cmdline);
+
+  if (paramcount = 0) or cmd.existsProperty('help') then
+    begin
+      PrintHelp;
+      exit;
+    end;
 
   inhandle := GetStdHandle(STD_INPUT_HANDLE);
   if GetFileType(inhandle) <> FILE_TYPE_CHAR then
@@ -307,9 +388,9 @@ begin
   if cmd.existsProperty('set_password')=true then
   begin
     LoadSSL;
-    privatekey:=cmd.readString('privatekey');
-    password:=cmd.readString('password');
-    if set_password(privatekey,password)=true then writeln('ok') else writeln('not ok');
+    key:=cmd.readString('key');
+    if password='' then password:=cmd.readString('password');
+    if set_password(key,password)=true then writeln('ok') else writeln('not ok');
     freessl;
     exit;
   end;
@@ -317,8 +398,8 @@ begin
   if cmd.existsProperty('encrypt_pub')=true then
   begin
     LoadSSL;
-    filename:=cmd.readString('filename');
-    hfile_ := CreateFile(pchar(filename), GENERIC_READ , FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING , FILE_ATTRIBUTE_NORMAL, 0);
+    in_:=cmd.readString('in');
+    hfile_ := CreateFile(pchar(in_), GENERIC_READ , FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING , FILE_ATTRIBUTE_NORMAL, 0);
     if hfile_=thandle(-1) then begin log('invalid handle',1);exit;end;
     ReadFile (hfile_,mem_[0],sizeof(mem_),size_,nil);
     if size_>0 then Encrypt_Pub (strpas(@mem_[0]),encrypted);
@@ -331,8 +412,8 @@ begin
   if cmd.existsProperty('decrypt_priv')=true then
   begin
     LoadSSL;
-    filename:=cmd.readString('filename');
-    hfile_ := CreateFile(pchar(filename), GENERIC_READ , FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING , FILE_ATTRIBUTE_NORMAL, 0);
+    in_:=cmd.readString('in');
+    hfile_ := CreateFile(pchar(in_), GENERIC_READ , FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING , FILE_ATTRIBUTE_NORMAL, 0);
     if hfile_=thandle(-1) then begin log('invalid handle',1);exit;end;
     ReadFile (hfile_,mem_[0],sizeof(mem_),size_,nil);
     if size_>0 then Decrypt_Priv(strpas(@mem_[0]));
@@ -357,10 +438,10 @@ begin
     try
     LoadSSL;
     //in
-    cert:=cmd.readString('cert');
-    if cert='' then filename:='cert.crt';
+    in_:=cmd.readString('in');
+    if in_='' then in_:='cert.crt';
     //
-    if PEM2P7B  (cert)=true then writeln('ok') else writeln('not ok');
+    if PEM2P7B  (in_)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -372,10 +453,10 @@ begin
     try
     LoadSSL;
     //in
-    cert:=cmd.readString('cert');
-    if cert='' then cert:='cert.p7b';
+    in_:=cmd.readString('in');
+    if in_='' then in_:='cert.p7b';
     //
-    if P7b2PEM (cert)=true then writeln('ok') else writeln('not ok');
+    if P7b2PEM (in_)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -387,13 +468,13 @@ begin
       try
       LoadSSL;
       //in
-      cert:=cmd.readString('cert');
-      privatekey:=cmd.readString('privatekey') ;
+      in_:=cmd.readString('in');
+      key:=cmd.readString('key') ;
       //
-      if privatekey <>'' then
-         if PVTPEM2DER (privatekey)=true then writeln('ok') else writeln('not ok');
-      if cert <>'' then
-         if X509PEM2DER (cert)=true then writeln('ok') else writeln('not ok');
+      if key <>'' then
+         if PVTPEM2DER (key)=true then writeln('ok') else writeln('not ok');
+      if in_ <>'' then
+         if X509PEM2DER (in_)=true then writeln('ok') else writeln('not ok');
       finally
       FreeSSL;
       end;
@@ -405,13 +486,13 @@ begin
     try
     LoadSSL;
     //in
-    cert:=cmd.readString('cert');
-    privatekey:=cmd.readString('privatekey') ;
+    in_:=cmd.readString('in');
+    key:=cmd.readString('key') ;
     //
-    if privatekey <>'' then
-       if PVTDER2PEM (privatekey)=true then writeln('ok') else writeln('not ok');
-    if cert <>'' then
-       if X509DER2PEM (cert)=true then writeln('ok') else writeln('not ok');
+    if key <>'' then
+       if PVTDER2PEM (key)=true then writeln('ok') else writeln('not ok');
+    if in_ <>'' then
+       if X509DER2PEM (in_)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -423,10 +504,11 @@ begin
     try
     LoadSSL;
     //in
-    cert:=cmd.readString('cert');
-    if cert='' then cert:='cert.pfx';
+    in_:=cmd.readString('in');
+    if in_='' then in_:='cert.pfx';
+    if password='' then password:=cmd.readString('password');
     //
-    if PFX2PEM (cert,cmd.readString('password'))=true then writeln('ok') else writeln('not ok');
+    if PFX2PEM (in_,password)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -438,12 +520,13 @@ begin
     try
     LoadSSL;
     //in
-    cert:=cmd.readString('cert') ;
-    if cert='' then cert:='cert.crt';
-    privatekey:=cmd.readString('privatekey') ;
-    if privatekey='' then privatekey:=changefileext(cert,'.key');
+    in_:=cmd.readString('in') ;
+    if in_='' then in_:='cert.crt';
+    key:=cmd.readString('key') ;
+    if key='' then key:=changefileext(in_,'.key');
+    if password='' then password:=cmd.readString('password');
     //
-    if PEM2PFX (cmd.readString('password'),privatekey,cert)=true then writeln('ok') else writeln('not ok');
+    if PEM2PFX (password,key,in_)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -455,18 +538,19 @@ begin
     try
     LoadSSL;
     //out
-    filename:=cmd.readString('filename');
-    if filename='' then filename:='ca.crt';
+    out_:=cmd.readString('out');
+    if out_='' then out_:='ca.crt';
+    //in
     algo:=cmd.readString('algo') ;
     if algo='' then algo:='RSA';
-    //in
-    privatekey:=cmd.readString('privatekey') ;
-    password:=cmd.readString('password') ;
+    key:=cmd.readString('key') ;
+    if password='' then password:=cmd.readString('password');
     cn:=cmd.readString('cn') ;
     if cn='' then cn:='_Root Authority_';
-    ca:=cmd.readString('ca')='true';
+    ca_val  := cmd.readString('ca');
+    ca_flag := (ca_val = 'true');
     //
-    if mkcert(filename,cn,privatekey,password,'',ca,algo)=true then writeln('ok') else writeln('not ok');
+    if mkcert(out_,cn,key,password,'',ca_flag,algo)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -480,11 +564,11 @@ begin
     //in
     cn:=cmd.readString('cn') ;
     if cn='' then cn:='localhost';
-    privatekey:=cmd.readString('privatekey') ;
+    key:=cmd.readString('key') ;
     //out
-    filename:=cmd.readString('filename');
-    if filename='' then filename:='request.csr';
-    if mkreq(cn,privatekey,filename)=true then writeln('ok') else writeln('not ok');
+    out_:=cmd.readString('out');
+    if out_='' then out_:='request.csr';
+    if mkreq(cn,key,out_)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -496,14 +580,15 @@ begin
     try
     LoadSSL;
     //in
-    filename:=cmd.readString('filename');
-    if filename='' then filename:='request.csr';
+    csr:=cmd.readString('csr');
+    if csr='' then csr:='request.csr';
     cert:=cmd.readString('cert');
     if cert='' then cert:='ca.crt';
-    password:=cmd.readString('password') ;
+    if password='' then password:=cmd.readString('password');
     alt:=cmd.readString('alt') ;
-    ca:=cmd.readString('ca')='true';
-    if signreq(filename,cert,password,alt,ca)=true then writeln('ok') else writeln('not ok');
+    ca_val  := cmd.readString('ca');
+    ca_flag := (ca_val = 'true');
+    if signreq(csr,cert,password,alt,ca_flag)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -533,14 +618,15 @@ begin
     try
       LoadSSL;
       cert := cmd.readString('cert');      // ex: ca.crt
-      filename := cmd.readString('filename'); // ex: server.crt
-      if (cert = '') or (filename = '') then
+      ca_val  := cmd.readString('ca');
+      ca_cert := ca_val;            // --ca=ca.crt
+      if (cert = '') or (ca_cert = '') then
       begin
         writeln('Erreur: --cert et --filename sont requis.');
         exit;
       end;
 
-      if verify_certificate(filename, cert) then
+      if verify_certificate(cert, ca_cert) then
         writeln('ok (Certificat valide)')
       else
         writeln('not ok (Certificat invalide ou chaîne non brisée)');
@@ -568,11 +654,11 @@ begin
     begin
     try
     LoadSSL;
-    privatekey:=cmd.readString('privatekey');
-    if not FileExists (privatekey) then exit;
-    if privatekey='' then exit;
-    password:=cmd.readString('password') ;
-    if print_private(privatekey,password)=true then writeln('ok') else writeln('not ok');
+    key := cmd.readString('key');
+    if key = '' then begin writeln('--key requis'); exit; end;
+    if not FileExists(key) then begin writeln('Fichier introuvable: ' + key); exit; end;
+    if password='' then password:=cmd.readString('password');
+    if print_private(key,password)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -583,9 +669,10 @@ begin
     begin
     try
     LoadSSL;
-    filename:=cmd.readString('filename');
-    if not FileExists (filename) then exit;
-    if print_req(filename)=true then writeln('ok') else writeln('not ok');
+    csr := cmd.readString('csr');
+    if csr = '' then begin writeln('--csr requis'); exit; end;
+    if not FileExists(csr) then begin writeln('Fichier introuvable: ' + cert); exit; end;
+    if print_req(csr)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -596,9 +683,9 @@ begin
     begin
     try
     LoadSSL;
-    filename:=cmd.readString('filename');
-    if not fileexists(filename) then exit;
-    if PrintSSHKey(filename)=true then writeln('ok') else writeln('not ok');
+    key:=cmd.readString('key');
+    if not fileexists(key) then exit;
+    if PrintSSHKey(key)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;
@@ -609,8 +696,8 @@ begin
     begin
     try
     LoadSSL;
-    filename:=cmd.readString('filename');
-    if GenerateDHParam(filename)=true then writeln('ok') else writeln('not ok');
+    out_:=cmd.readString('out');
+    if GenerateDHParam(out_)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;

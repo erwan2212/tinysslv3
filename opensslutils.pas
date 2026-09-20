@@ -987,6 +987,8 @@ begin
   log('signreq');
   log('filename:' + filename);
   log('cert:'     + cert);
+  log('alt:'     + alt);
+  log('ca:'     + booltostr(ca));
   result := false;
 
   try
