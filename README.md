@@ -288,7 +288,7 @@ tinySSL --hash --algo=<digest> --password=<data>
 ```
 tinySSL --hash --algo=SHA-256 --password=hello
 tinySSL --hash --algo=SHA3-256 --password=hello
-echo hello | tinySSL --hash --algo=SHA-256
+echo hello| tinySSL --hash --algo=SHA-256
 ```
 
 ---
