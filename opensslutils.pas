@@ -1364,7 +1364,14 @@ These certificates are mainly used on the Windows platform.
       { =========================================================
         8. Signature du certificat avec SHA-256
         ======================================================== }
+      if AnsiUpperCase(sAlgo) = 'ED25519' then
+      begin
+      if X509_sign(x509, pkey, nil) = 0 then Exit;  // ED25519 = digest implicite
+      end
+      else
+      begin
       if X509_sign(x509, pkey, EVP_sha256()) = 0 then Exit;
+      end;
 
       { =========================================================
         9. Écriture de la clé privée sur disque (uniquement si générée)
