@@ -38,7 +38,9 @@ function LoadSSL: Boolean;
 procedure FreeSSL;
 //function generate_rsa_key:boolean;
 function generate_rsa_key_2:boolean;
-function mkcert(filename:string;cn:string;privatekey:string='';read_password:string='';serial:string='';ca:boolean=false;algo:string=''):boolean;
+function mkcert(filename: string; cn: string; privatekey: string = '';
+                rw_password: string = ''; serial: string = '';
+                ca: boolean = false; algo: string = ''): boolean;
 function mkreq(cn:string;keyfile,csrfile:string):boolean;
 function signreq(filename:string;cert:string;read_password:string='';alt:string='';ca:boolean=false):boolean;
 //function selfsign(filename:string;subject:string):boolean;
@@ -1169,126 +1171,115 @@ These certificates are mainly used on the Windows platform.
     - EVP_PKEY_CTX_free remplace la libération manuelle du ctx keygen.
   ============================================================================ }
 
-function mkcert(filename: string; cn: string; privatekey: string = '';
-                read_password: string = ''; serial: string = '';
-                ca: boolean = false;algo:string=''): boolean;
-var
-  pkey     : PEVP_PKEY     = nil;
-  x509     : pX509          = nil;
-  name     : pX509_NAME    = nil;
-  bp       : pBIO           = nil;
-  kctx     : PEVP_PKEY_CTX = nil;   { contexte de génération de clé }
-  ret      : integer;
-  days_in_seconds : Int64;
-  iserial  : integer ;
-  asn1     : pASN1_INTEGER = nil;
-  p        : pBIGNUM        = nil;
-  value    : string;
-  keyPath, certPath : string;
-  sAlgo,sAlgoForCtx    : string;
-  CurveNID : integer;
-begin
-  result := false;
+  function mkcert(filename: string; cn: string; privatekey: string = '';
+                  rw_password: string = ''; serial: string = '';
+                  ca: boolean = false; algo: string = ''): boolean;
+  var
+    pkey            : PEVP_PKEY     = nil;
+    x509            : pX509          = nil;
+    name            : pX509_NAME    = nil;
+    bp              : pBIO           = nil;
+    kctx            : PEVP_PKEY_CTX = nil;   { contexte de génération de clé }
+    ret             : integer;
+    days_in_seconds : Int64;
+    iserial         : integer;
+    asn1            : pASN1_INTEGER = nil;
+    p               : pBIGNUM       = nil;
+    value           : string;
+    keyPath, certPath : string;
+    sAlgo, sAlgoForCtx : string;
+    CurveNID        : integer;
+    passPtr         : PAnsiChar;
+    passLen         : integer;
+  begin
+    result := false;
 
-  { Détermination de l'algorithme par défaut si vide }
+    { Détermination de l'algorithme par défaut si vide }
     sAlgo := Trim(algo);
     if sAlgo = '' then
       sAlgo := 'RSA';
 
     log('mkcert (OpenSSL 3.0) - Algo: ' + sAlgo);
 
-  { ---- Construction des chemins ------------------------------------------ }
-  certPath := filename;
-  if ExtractFilePath(certPath) = '' then
-    certPath := IncludeTrailingPathDelimiter(GetCurrentDir) + certPath;
-  keyPath := ChangeFileExt(certPath, '.key');
+    { ---- Construction des chemins ------------------------------------------ }
+    certPath := filename;
+    if ExtractFilePath(certPath) = '' then
+      certPath := IncludeTrailingPathDelimiter(GetCurrentDir) + certPath;
+    keyPath := ChangeFileExt(certPath, '.key');
 
-  try
-    { =========================================================
-      1. Clé privée — Génération ou Chargement
-      ========================================================= }
-    if privatekey = '' then
-    begin
-      log('EVP_PKEY_generate ' + sAlgo + ' (OpenSSL 3.0)');
+    try
+      { =========================================================
+        1. Clé privée — Génération ou Chargement
+        ======================================================== }
+      if privatekey = '' then
+      begin
+        log('EVP_PKEY_generate ' + sAlgo + ' (OpenSSL 3.0)');
 
-      { Créer le contexte de génération par nom d'algorithme.
-        On passe nil pour libctx (contexte de bibliothèque par défaut)
-        et nil pour propquery (pas de contrainte de propriété). }
-        // Normaliser avant EVP_PKEY_CTX_new_from_name
+        { Normaliser avant EVP_PKEY_CTX_new_from_name }
         if (AnsiUpperCase(sAlgo) = 'EC384') or (AnsiUpperCase(sAlgo) = 'EC521') then
           sAlgoForCtx := 'EC'
         else
           sAlgoForCtx := sAlgo;
-      kctx := EVP_PKEY_CTX_new_from_name(nil, PAnsiChar(AnsiString(sAlgoForCtx)), nil);
-      if kctx = nil then Exit;
 
-      try
-        { Initialiser l'opération keygen }
-        if EVP_PKEY_keygen_init(kctx) <> 1 then Exit;
+        kctx := EVP_PKEY_CTX_new_from_name(nil, PAnsiChar(AnsiString(sAlgoForCtx)), nil);
+        if kctx = nil then Exit;
 
-        { Configuration spécifique selon l'algorithme choisi }
+        try
+          { Initialiser l'opération keygen }
+          if EVP_PKEY_keygen_init(kctx) <> 1 then Exit;
+
+          { Configuration spécifique selon l'algorithme choisi }
           if AnsiUpperCase(sAlgo) = 'RSA' then
           begin
-            { Paramétrer la taille de clé RSA (ex: 2048 bits) }
             if EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) <= 0 then Exit;
           end
           else if AnsiUpperCase(sAlgo) = 'EC' then
           begin
-            { Courbe P-256 (prime256v1 / secp256r1) par défaut }
             CurveNID := OBJ_sn2nid('prime256v1');
             if EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, CurveNID) <= 0 then Exit;
           end
           else if AnsiUpperCase(sAlgo) = 'EC384' then
           begin
-            { Le nom technique de l'algo pour OpenSSL reste 'EC' }
             sAlgo := 'EC';
             CurveNID := OBJ_sn2nid('secp384r1');
             if EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, CurveNID) <= 0 then Exit;
           end
           else if AnsiUpperCase(sAlgo) = 'EC521' then
           begin
-            { Le nom technique de l'algo pour OpenSSL reste 'EC' }
             sAlgo := 'EC';
             CurveNID := OBJ_sn2nid('secp521r1');
             if EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, CurveNID) <= 0 then Exit;
           end
           else if AnsiUpperCase(sAlgo) = 'ED25519' then
           begin
-            { Ed25519 ne requiert pas de paramètre de taille ou de courbe supplémentaire }
+            { Ed25519 ne requiert pas de paramètre supplémentaire }
           end;
 
-        { OpenSSL 3.0 utilise 65537 (F4) comme exposant public par défaut ;
-          aucun appel supplémentaire n'est nécessaire pour l'imposer.
-          Si vous deviez le changer, utilisez EVP_PKEY_CTX_set1_rsa_keygen_pubexp
-          (déclarée dans openssl_rsa) à la place de l'ancien set_rsa_keygen_pubexp
-          (déprécié). }
-
-        { Générer la clé ; EVP_PKEY_generate alloue *pkey. }
-        if EVP_PKEY_generate(kctx, @pkey) <> 1 then Exit;
-      finally
-        { Le contexte keygen est indépendant de pkey : on le libère ici. }
-        EVP_PKEY_CTX_free(kctx);
-        kctx := nil;
+          { Générer la clé }
+          if EVP_PKEY_generate(kctx, @pkey) <> 1 then Exit;
+        finally
+          EVP_PKEY_CTX_free(kctx);
+          kctx := nil;
+        end;
+      end
+      else
+      begin
+        log('Reusing ' + privatekey);
+        pkey := LoadPrivateKey(privatekey, rw_password);
+        if pkey = nil then Exit;
       end;
-    end
-    else
-    begin
-      log('Reusing ' + privatekey);
-      pkey := LoadPrivateKey(privatekey, read_password);
-      if pkey = nil then Exit;
-    end;
 
-    { =========================================================
-      2. Création du certificat X.509 v3
-      ========================================================= }
-    x509 := X509_new();
-    if x509 = nil then Exit;
+      { =========================================================
+        2. Création du certificat X.509 v3
+        ======================================================== }
+      x509 := X509_new();
+      if x509 = nil then Exit;
 
-    X509_set_version(x509, 2); { 2 = v3 }
+      X509_set_version(x509, 2); { 2 = v3 }
 
-    { =========================================================
+      { =========================================================
         3. Numéro de série
-    ========================================================= }
+        ======================================================== }
       if serial = '' then
       begin
         iserial := Random($7FFFFFFF);
@@ -1296,8 +1287,6 @@ begin
       end
       else
       begin
-        { BN_hex2bn attend un PPBIGNUM : il alloue le BIGNUM lui-même
-          si *pp = nil. On déclare p : PBIGNUM = nil dans la section var. }
         if BN_hex2bn(@p, PAnsiChar(AnsiString(serial))) = 0 then Exit;
         try
           asn1 := BN_to_ASN1_INTEGER(p, nil);
@@ -1314,121 +1303,125 @@ begin
         end;
       end;
 
-    { =========================================================
-      4. Durée de validité (5 ans)
-      ========================================================= }
-    days_in_seconds := Int64(5) * 365 * 24 * 3600;
-    X509_gmtime_adj(X509_get_notBefore(x509), 0);
-    X509_gmtime_adj(X509_get_notAfter(x509), days_in_seconds);
+      { =========================================================
+        4. Durée de validité (5 ans)
+        ======================================================== }
+      days_in_seconds := Int64(5) * 365 * 24 * 3600;
+      X509_gmtime_adj(X509_get_notBefore(x509), 0);
+      X509_gmtime_adj(X509_get_notAfter(x509), days_in_seconds);
 
-    { =========================================================
-      5. Clé publique
-      ========================================================= }
-    X509_set_pubkey(x509, pkey);
+      { =========================================================
+        5. Clé publique
+        ======================================================== }
+      X509_set_pubkey(x509, pkey);
 
-    { =========================================================
-      6. Subject & Issuer (certificat auto-signé)
-      ========================================================= }
-    name := X509_NAME_new();
-    if name = nil then Exit;
-    try
-      name_add_entry('cert', name);
-      X509_NAME_add_entry_by_txt(name, 'CN', MBSTRING_ASC,
-                                 PByte(PAnsiChar(AnsiString(cn))), -1, -1, 0);
-      X509_set_subject_name(x509, name);
-      X509_set_issuer_name(x509, name);
-    finally
-      { OpenSSL fait une copie interne : on libère le name local. }
-      X509_NAME_free(name);
-      name := nil;
-    end;
+      { =========================================================
+        6. Subject & Issuer (certificat auto-signé)
+        ======================================================== }
+      name := X509_NAME_new();
+      if name = nil then Exit;
+      try
+        name_add_entry('cert', name);
+        X509_NAME_add_entry_by_txt(name, 'CN', MBSTRING_ASC,
+                                   PByte(PAnsiChar(AnsiString(cn))), -1, -1, 0);
+        X509_set_subject_name(x509, name);
+        X509_set_issuer_name(x509, name);
+      finally
+        X509_NAME_free(name);
+        name := nil;
+      end;
 
-    { =========================================================
-      7. Extensions X.509v3
-      ========================================================= }
-    if ca then
-      add_ext(x509, NID_basic_constraints, 'critical,CA:TRUE');
+      { =========================================================
+        7. Extensions X.509v3
+        ======================================================== }
+      if ca then
+        add_ext(x509, NID_basic_constraints, 'critical,CA:TRUE');
 
-    value := ini_readstring('cert_ext', 'key_usage');
-    //if value = '' then value := 'digitalSignature';
-    // Valeur par défaut selon le type de certificat
-    if ca then
-      if value = '' then value := 'critical,keyCertSign,cRLSign'
-    else
-      if value = '' then value := 'digitalSignature';
-    log('NID_key_usage=' + IntToStr(NID_key_usage) + ' value=' + value);
-    add_ext(x509, NID_key_usage, value);
+      value := ini_readstring('cert_ext', 'key_usage');
+      if ca then
+      begin
+        if value = '' then value := 'critical,keyCertSign,cRLSign';
+      end
+      else
+      begin
+        if value = '' then value := 'digitalSignature';
+      end;
+      log('NID_key_usage=' + IntToStr(NID_key_usage) + ' value=' + value);
+      add_ext(x509, NID_key_usage, value);
 
-    value := ini_readstring('cert_ext', 'subject_key_identifier');
-    if value = 'hash' then hash_pubkey(x509);
+      value := ini_readstring('cert_ext', 'subject_key_identifier');
+      if value = 'hash' then hash_pubkey(x509);
 
-    value := ini_readstring('cert_ext', 'ext_key_usage');
-    if value <> '' then
-       begin
-       log('NID_ext_key_usage=' + IntToStr(NID_ext_key_usage) + ' value=' + value);
-       add_ext(x509, NID_ext_key_usage, value);
-       end;
+      value := ini_readstring('cert_ext', 'ext_key_usage');
+      if value <> '' then
+      begin
+        log('NID_ext_key_usage=' + IntToStr(NID_ext_key_usage) + ' value=' + value);
+        add_ext(x509, NID_ext_key_usage, value);
+      end;
 
-    { =========================================================
-      8. Signature du certificat avec SHA-256
-      ========================================================= }
-    if X509_sign(x509, pkey, EVP_sha256()) = 0 then Exit;
+      { =========================================================
+        8. Signature du certificat avec SHA-256
+        ======================================================== }
+      if X509_sign(x509, pkey, EVP_sha256()) = 0 then Exit;
 
-    { =========================================================
-      9. Écriture de la clé privée sur disque (uniquement si générée)
-         On passe d'EVP_des_ede3_cbc à EVP_aes_256_cbc, recommandé
-         en OpenSSL 3.0. Les deux fonctions sont disponibles dans
-         openssl_evp ; si vous préférez rester sur 3DES pour la
-         compatibilité, remplacez simplement EVP_aes_256_cbc()
-         par EVP_des_ede3_cbc().
-      ========================================================= }
-    if privatekey = '' then
-    begin
-      bp := BIO_new_file(PAnsiChar(AnsiString(keyPath)), 'w+');
+      { =========================================================
+        9. Écriture de la clé privée sur disque (uniquement si générée)
+        ======================================================== }
+      if privatekey = '' then
+      begin
+        bp := BIO_new_file(PAnsiChar(AnsiString(keyPath)), 'w+');
+        if bp = nil then Exit;
+        try
+          { Préparation du mot de passe pour l'écriture de la clé PEM chiffrée }
+          if rw_password <> '' then
+          begin
+            passPtr := PAnsiChar(AnsiString(rw_password));
+            passLen := Length(rw_password);
+          end
+          else
+          begin
+            passPtr := nil;
+            passLen := 0;
+          end;
+
+          ret := PEM_write_bio_PrivateKey(
+                     bp,
+                     pkey,
+                     EVP_aes_256_cbc(), { chiffrement AES-256-CBC }
+                     PByte(passPtr),    { mot de passe inline (nil si vide) }
+                     passLen,
+                     nil,               { callback de mot de passe (nil = prompt console si passPtr est nil) }
+                     nil);
+        finally
+          BIO_free(bp);
+          bp := nil;
+        end;
+        if ret <= 0 then Exit;
+      end;
+
+      { =========================================================
+        10. Écriture du certificat sur disque
+        ======================================================== }
+      bp := BIO_new_file(PAnsiChar(AnsiString(certPath)), 'w+');
       if bp = nil then Exit;
       try
-        ret := PEM_write_bio_PrivateKey(
-                 bp,
-                 pkey,
-                 EVP_aes_256_cbc(), { chiffrement AES-256-CBC }
-                 nil,               { pas de mot de passe inline }
-                 0,
-                 nil,               { callback de mot de passe (nil = prompt console) }
-                 nil);
+        ret := PEM_write_bio_X509(bp, x509);
       finally
         BIO_free(bp);
         bp := nil;
       end;
       if ret <= 0 then Exit;
-    end;
 
-    { =========================================================
-      10. Écriture du certificat sur disque
-      ========================================================= }
-    bp := BIO_new_file(PAnsiChar(AnsiString(certPath)), 'w+');
-    if bp = nil then Exit;
-    try
-      ret := PEM_write_bio_X509(bp, x509);
+      result := true;
+
     finally
-      BIO_free(bp);
-      bp := nil;
+      if kctx  <> nil then EVP_PKEY_CTX_free(kctx);
+      if x509  <> nil then X509_free(x509);
+      if pkey  <> nil then EVP_PKEY_free(pkey);
+      if p     <> nil then BN_free(p);
+      if asn1  <> nil then ASN1_INTEGER_free(asn1);
     end;
-    if ret <= 0 then Exit;
-
-    result := true;
-
-  finally
-    { ---- Nettoyage sécurisé ---------------------------------------------- }
-    { kctx est libéré dans son propre bloc try/finally ci-dessus ;
-      cette garde couvre les cas d'Exit prématuré avant ce bloc. }
-    if kctx  <> nil then EVP_PKEY_CTX_free(kctx);
-    if x509  <> nil then X509_free(x509);
-    if pkey  <> nil then EVP_PKEY_free(pkey);
-    { p et asn1 sont libérés dans leurs propres blocs ; guards de sécurité : }
-    if p     <> nil then BN_free(p);
-    if asn1  <> nil then ASN1_INTEGER_free(asn1);
   end;
-end;
 
 //to sign a csr
 //openssl x509 -req -in device.csr -CA rootCA.pem -CAkey rootCA.key -CAcreateserial -out device.crt -days 500 -sha256

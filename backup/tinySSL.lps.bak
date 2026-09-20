@@ -45,8 +45,8 @@
         <Filename Value="tinySSL.lpr"/>
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
-        <TopLine Value="601"/>
-        <CursorPos X="23" Y="614"/>
+        <TopLine Value="599"/>
+        <CursorPos X="54" Y="624"/>
         <UsageCount Value="219"/>
         <Loaded Value="True"/>
       </Unit0>
@@ -59,8 +59,8 @@
         <Filename Value="opensslutils.pas"/>
         <IsPartOfProject Value="True"/>
         <EditorIndex Value="2"/>
-        <TopLine Value="3186"/>
-        <CursorPos X="25" Y="3190"/>
+        <TopLine Value="3208"/>
+        <CursorPos X="31" Y="3226"/>
         <UsageCount Value="219"/>
         <Loaded Value="True"/>
       </Unit2>
