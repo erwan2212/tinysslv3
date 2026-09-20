@@ -55,7 +55,7 @@ Example : create a root ca (reusing a previous key), create a csr (reusing a pre
 rem if you want to reuse an existing key and therefore renew instead of recreate<br/>
 tinySSL.exe --mkcert --debug=true --privatekey=ca.key --password=password --filename=ca.crt --ca=true<br/>
 rem recreate, not renew<br/>
-rem tinySSL.exe --mkcert --debug=true --filename=ca.crt --ca=true<br/>
+rem tinySSL.exe --mkcert --debug=true --filename=ca.crt --ca=true --password=password<br/>
 rem renew, not recreate<br/>
 tinySSL.exe --mkreq --debug=true --filename=request.csr --privatekey=request.key<br/>
 rem recreate, not renew<br/>
