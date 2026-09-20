@@ -108,8 +108,8 @@ Output: `<csr_name>.crt`
 
 **Examples:**
 ```
-tinySSL --signreq --csr=request.csr --ca=ca.crt --password=password
-tinySSL --signreq --csr=request.csr --ca=ca.crt --alt="DNS:*.example.com,IP:192.168.1.1"
+tinySSL --signreq --csr=request.csr --cert=ca.crt --password=password
+tinySSL --signreq --csr=request.csr --cert=ca.crt --alt="DNS:*.example.com,IP:192.168.1.1"
 ```
 
 ---
