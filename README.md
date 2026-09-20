@@ -57,7 +57,7 @@ tinySSL --mkcert [--out=<file>] [--cn=<name>] [--algo=<algo>] [--ca=true] [--key
 | `--out` | `ca.crt` | Output certificate file (`.key` is created alongside) |
 | `--cn` | `_Root Authority_` | Common Name |
 | `--algo` | `RSA` | Key algorithm: `RSA`, `EC`, `EC384`, `EC521`, `ED25519` |
-| `--ca` | true | Mark as CA certificate (adds `basicConstraints: critical,CA:TRUE`) |
+| `--ca` | false | Mark as CA certificate (adds `basicConstraints: critical,CA:TRUE`) |
 | `--key` | *(generated)* | Reuse an existing private key |
 | `--password` | | Password to protect the generated private key |
 
@@ -93,14 +93,14 @@ tinySSL --mkreq --out=server.csr --cn="myapp" --key=server.key
 ### `--signreq` — Sign a CSR with a CA certificate
 
 ```
-tinySSL --signreq [--csr=<file>] [--ca=<ca_cert>] [--password=<pwd>] [--alt=<san>]
+tinySSL --signreq [--csr=<file>] [--cert=<ca_cert>]  [--ca=true] [--password=<pwd>] [--alt=<san>]
 ```
 
 | Parameter | Default | Description |
 |---|---|---|
 | `--csr` | `request.csr` | Input CSR file |
 | `--cert` | `ca.crt` | CA certificate used for signing (`.key` loaded automatically) |
-| `--ca` | true | Mark as CA certificate (adds `basicConstraints: critical,CA:TRUE`) |
+| `--ca` | false | Mark as CA certificate (adds `basicConstraints: critical,CA:TRUE`) |
 | `--password` | | CA private key password |
 | `--alt` | | Subject Alternative Name(s) |
 
