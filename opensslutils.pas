@@ -1825,8 +1825,9 @@ begin
     if EVP_PKEY_decrypt(dctx, nil, @outLen, binBuf, binLen) <> 1 then Exit;
 
     log('EVP_PKEY_decrypt outlen: ' + IntToStr(outLen));
-
-    // Passe 2 : déchiffrement effectif
+    if outLen = 0 then Exit;   // ← AJOUT : sortie sécurisée si outLen invalide
+   
+	// Passe 2 : déchiffrement effectif
     GetMem(outBuf, outLen);
     if EVP_PKEY_decrypt(dctx, outBuf, @outLen, binBuf, binLen) <> 1 then
     begin
