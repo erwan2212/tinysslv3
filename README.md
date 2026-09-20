@@ -3,7 +3,7 @@
 New tinyssl but using libcrypto 3.x and https://github.com/MWASoftware/PascalAPI4OpenSSL/tree/main</br>
 
 <br/>
-TinySSL, aka playing with openssl library (libeay32) for digest, cipher and certificate matters.<br/>
+TinySSL, aka playing with openssl library for digest, cipher and certificate matters.<br/>
 <br/>
 The following command line options are valid:<br/>
 
@@ -55,7 +55,7 @@ Example : create a root ca (reusing a previous key), create a csr (reusing a pre
 rem if you want to reuse an existing key and therefore renew instead of recreate<br/>
 tinySSL.exe --mkcert --debug=true --privatekey=ca.key --password=password --filename=ca.crt --ca=true<br/>
 rem recreate, not renew<br/>
-rem tinySSL.exe --mkcert --debug=true --filename=ca.crt --ca=true<br/>
+rem tinySSL.exe --mkcert --debug=true --filename=ca.crt --ca=true --password=password<br/>
 rem renew, not recreate<br/>
 tinySSL.exe --mkreq --debug=true --filename=request.csr --privatekey=request.key<br/>
 rem recreate, not renew<br/>
@@ -74,8 +74,9 @@ tinyssl --p12topem --cert=request.pfx</br>
 Exemple to generate a public/private key pair and convert into into a open ssh key for ssh purpose:<br/>
 tinySSL.exe --genkey<br/>
 tinyssl.exe --print_sshkey --filename=public.pem<br/>
-rem now copy your ssh key to your ssh servers authorized_keys</br>
+rem now copy your ssh pub key to your ssh server authorized_keys</br>
+rem lets secure the local windows private key</br>
 icacls private.pem /inheritance:r<br/>
 icacls private.pem /grant:r "%USERNAME%:F"<br/>
-ssh -i private.pem erwan@192.168.1.238<br/>
+ssh -i private.pem username@ip<br/>
 
