@@ -354,13 +354,13 @@ Lists all algorithms available from the loaded OpenSSL providers.
 
 ```bash
 # 1. Generate a root CA
-tinySSL --mkcert --out=ca.crt --cn="My Root CA" --ca=true --algo=RSA
+tinySSL --mkcert --out=ca.crt --cn="My Root CA" --ca=true --algo=RSA --password=secret
 
 # 2. Generate a CSR for the server
 tinySSL --mkreq --out=server.csr --cn="www.example.com"
 
 # 3. Sign the CSR with the CA
-tinySSL --signreq --csr=server.csr --cert=ca.crt --alt="DNS:www.example.com,DNS:*.example.com"
+tinySSL --signreq --csr=server.csr --cert=ca.crt --alt="DNS:www.example.com,DNS:*.example.com"  --password=secret
 
 # 4. Verify the result
 tinySSL --verify --cert=server.crt --ca=ca.crt
