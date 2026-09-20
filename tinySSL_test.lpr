@@ -273,7 +273,7 @@ begin
   Section('print_private');
   if not FileExists('ca_rsa.key') then begin Skip('print_private', 'ca_rsa.key absent'); Exit; end;
   WriteLn('  --- Détails ca_rsa.key ---');
-  Check('print_private (sans mot de passe)', print_private('ca_rsa.key'));
+  Check('print_private (sans mot de passe)', print_private('ca_rsa.key','secret'));
 end;
 
 procedure Test_PrintRequest;
