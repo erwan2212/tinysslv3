@@ -65,7 +65,7 @@ function print_private(filename:string;password:string=''):boolean;
 function print_req(filename:string):boolean;
 
 function Encrypt_Pub(sometext:string;var encrypted:string):boolean;
-function Decrypt_Priv(ACryptedData:string):boolean;
+function Decrypt_Priv(ACryptedData: string;var decrypted:string): boolean;
 
 function hash(algo:string;input:array of byte):boolean;
 function crypt(algo,input:string;keystr:string='';ivstr:string='';enc:integer=1):boolean;
@@ -282,18 +282,11 @@ begin
   end;
 
   try
-    // 4. Création de la structure PKCS#7 "certs only" avec PKCS7_PARTIAL
+    // 4. Création directe de la structure PKCS#7 "certs-only" (sans PKCS7_final)
     p7 := PKCS7_sign(nil, nil, certs, nil, PKCS7_PARTIAL or PKCS7_BINARY);
     if p7 = nil then
     begin
       log('Erreur : échec de PKCS7_sign (structure partielle).');
-      Exit;
-    end;
-
-    // Finalisation indispensable de la structure PKCS#7 "certs-only"
-    if PKCS7_final(p7, nil, PKCS7_BINARY) <= 0 then
-    begin
-      log('Erreur : échec de PKCS7_final.');
       Exit;
     end;
 
@@ -1663,6 +1656,7 @@ var
   b64data       : AnsiString;
   b64len        : integer;
   err           : Cardinal;
+  memPtr        : PAnsiChar;
 begin
   result := false;
 
@@ -1675,18 +1669,13 @@ begin
   try
     // =========================================================
     // 2. Création du contexte de chiffrement
-    //    Remplace : EVP_PKEY_get1_RSA + RSA_size + RSA_public_encrypt
     // =========================================================
     ectx := EVP_PKEY_CTX_new_from_pkey(nil, FKey, nil);
     if ectx = nil then Exit;
 
     if EVP_PKEY_encrypt_init(ectx) <> 1 then Exit;
 
-    // PKCS1_PADDING conservé pour la compatibilité avec l'original.
-    // Préférer RSA_PKCS1_OAEP_PADDING pour les nouveaux développements.
-    //if EVP_PKEY_CTX_set_rsa_padding(ectx, RSA_PKCS1_PADDING) <= 0 then Exit;
-    if EVP_PKEY_CTX_set_rsa_padding(ectx, RSA_PKCS1_OAEP_PADDING) <= 0 then Exit;
-    // + optionnel : EVP_PKEY_CTX_set_rsa_oaep_md(ectx, EVP_sha256())
+    if EVP_PKEY_CTX_set_rsa_padding(ectx, RSA_PKCS1_PADDING) <= 0 then Exit;
 
     input := AnsiString(sometext);
 
@@ -1715,46 +1704,44 @@ begin
 
       // =========================================================
       // 3. Encodage Base64 via chaîne BIO
-      //    b64 → bio_mem ; on écrit dans la chaîne, on lit depuis bio_mem
       // =========================================================
       b64     := BIO_new(BIO_f_base64());
       bio_mem := BIO_new(BIO_s_mem());
       if (b64 = nil) or (bio_mem = nil) then Exit;
 
-      BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);  // pas de saut de ligne
-      bioChain := BIO_push(b64, bio_mem);           // b64 écrit dans bio_mem
-      b64 := nil;                                   // appartient maintenant à la chaîne
+      BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL); // pas de saut de ligne
+      bioChain := BIO_push(b64, bio_mem);         // b64 écrit dans bio_mem
 
       try
         if BIO_write(bioChain, encBuf, encLen) <= 0 then Exit;
         BIO_flush(bioChain);
 
-        // Lire le résultat Base64 depuis bio_mem
-        b64len := BIO_pending(bio_mem);
-        SetLength(b64data, b64len);
-        if BIO_read(bio_mem, @b64data[1], b64len) <> b64len then Exit;
+        // Récupération directe et propre du contenu Base64 depuis le memory BIO
+        b64len := BIO_get_mem_data(bio_mem, @memPtr);
+        if (b64len > 0) and (memPtr <> nil) then
+        begin
+          SetLength(b64data, b64len);
+          Move(memPtr^, b64data[1], b64len);
+          encrypted := string(b64data);
+          log('Base64 len: ' + IntToStr(b64len));
+        end
+        else
+          Exit;
 
-        encrypted := string(b64data);
-        log('Base64 len: ' + IntToStr(b64len));
       finally
-        BIO_free_all(bioChain);  // libère b64 + bio_mem
-        bioChain := nil;
+        // BIO_free_all libère toute la chaîne (b64 + bio_mem d'un seul coup)
+        BIO_free_all(bioChain);
       end;
 
     finally
       FreeMem(encBuf);
-      encBuf := nil;
     end;
 
     result := true;
 
   finally
-    if ectx    <> nil then EVP_PKEY_CTX_free(ectx);
-    if FKey    <> nil then EVP_PKEY_free(FKey);
-    // b64 et bio_mem libérés par BIO_free_all(bioChain) sauf en cas
-    // d'Exit avant BIO_push ; les gardes ci-dessous couvrent ce cas.
-    if b64     <> nil then BIO_free(b64);
-    if bio_mem <> nil then BIO_free(bio_mem);
+    if ectx  <> nil then EVP_PKEY_CTX_free(ectx);
+    if FKey  <> nil then EVP_PKEY_free(FKey);
   end;
 end;
 
@@ -1764,24 +1751,26 @@ openssl genrsa 2048 > private2.pem
 -Generate public key from private
 openssl rsa -in private2.pem -pubout > public2.pem
 }
-function Decrypt_Priv(ACryptedData: string): boolean;
+function Decrypt_Priv(ACryptedData: string;var decrypted:string): boolean;
 var
-  FKey     : PEVP_PKEY     = nil;
-  dctx     : PEVP_PKEY_CTX = nil;
+  FKey      : PEVP_PKEY     = nil;
+  dctx      : PEVP_PKEY_CTX = nil;
   // décodage Base64
-  b64      : pBIO           = nil;
-  bio_mem  : pBIO           = nil;
-  bioChain : pBIO           = nil;
-  binBuf   : PByte          = nil;
-  binLen   : integer;
+  b64       : pBIO          = nil;
+  bio_mem   : pBIO          = nil;
+  bioChain  : pBIO          = nil;
+  binBuf    : PByte         = nil;
+  binLen    : integer;
   // déchiffrement
-  outBuf   : PByte          = nil;
-  outLen   : TOpenSSL_C_SIZET;
+  outBuf    : PByte         = nil;
+  outLen    : TOpenSSL_C_SIZET;
+  realOutLen: TOpenSSL_C_SIZET;
   // résultat
-  plainText: AnsiString;
-  err      : TOpenSSL_C_ULONG;
+  plainText : AnsiString;
+  err       : TOpenSSL_C_ULONG;
 begin
   result := false;
+  decrypted:='';
 
   // =========================================================
   // 1. Chargement de la clé privée
@@ -1800,8 +1789,6 @@ begin
   try
     // =========================================================
     // 2. Décodage Base64 → buffer binaire
-    //    Symétrique de l'encodage fait dans Encrypt_Pub :
-    //    on chaîne b64 → bio_mem et on lit depuis bio_mem.
     // =========================================================
     log('Base64 decode, input len: ' + IntToStr(Length(ACryptedData)));
 
@@ -1812,12 +1799,10 @@ begin
 
     BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
     bioChain := BIO_push(b64, bio_mem);
-    b64     := nil;   // appartient à la chaîne
+    b64     := nil;
     bio_mem := nil;
 
     try
-      // Allouer un buffer de la taille max possible (= longueur Base64,
-      // le décodé sera toujours plus court ou égal).
       GetMem(binBuf, Length(ACryptedData));
       binLen := BIO_read(bioChain, binBuf, Length(ACryptedData));
       log('BIO_read (bin): ' + IntToStr(binLen));
@@ -1829,29 +1814,36 @@ begin
 
     // =========================================================
     // 3. Déchiffrement RSA avec la clé privée
-    //    Remplace : EVP_PKEY_get1_RSA + RSA_size + RSA_private_decrypt
     // =========================================================
     dctx := EVP_PKEY_CTX_new_from_pkey(nil, FKey, nil);
     if dctx = nil then Exit;
 
     if EVP_PKEY_decrypt_init(dctx) <> 1 then Exit;
 
-    // Conserver RSA_PKCS1_PADDING pour la compatibilité avec Encrypt_Pub.
-    // Passer à RSA_PKCS1_OAEP_PADDING si Encrypt_Pub est aussi mis à jour.
-    //if EVP_PKEY_CTX_set_rsa_padding(dctx, RSA_PKCS1_PADDING) <= 0 then Exit;
-    if EVP_PKEY_CTX_set_rsa_padding(dctx, RSA_PKCS1_OAEP_PADDING) <= 0 then Exit;
-    // + optionnel : EVP_PKEY_CTX_set_rsa_oaep_md(ectx, EVP_sha256())
+    // SYNC OBLIGATOIRE AVEC Encrypt_Pub : Utilisation de OAEP
+    //if EVP_PKEY_CTX_set_rsa_padding(dctx, RSA_PKCS1_OAEP_PADDING) <= 0 then Exit;
+    if EVP_PKEY_CTX_set_rsa_padding(dctx, RSA_PKCS1_PADDING) <= 0 then Exit;
 
     // Passe 1 : obtenir la taille du buffer de sortie
     outLen := 0;
-    if EVP_PKEY_decrypt(dctx, nil, @outLen, binBuf, binLen) <> 1 then Exit;
+    if EVP_PKEY_decrypt(dctx, nil, @outLen, binBuf, binLen) <> 1 then
+    begin
+      err := ERR_get_error;
+      repeat
+        log(string(ERR_error_string(err, nil)), 1);
+        err := ERR_get_error;
+      until err = 0;
+      Exit;
+    end;
 
     log('EVP_PKEY_decrypt outlen: ' + IntToStr(outLen));
-    if outLen = 0 then Exit;   // ← AJOUT : sortie sécurisée si outLen invalide
-   
-	// Passe 2 : déchiffrement effectif
+    if outLen = 0 then Exit;
+
+    // Passe 2 : déchiffrement effectif
     GetMem(outBuf, outLen);
-    if EVP_PKEY_decrypt(dctx, outBuf, @outLen, binBuf, binLen) <> 1 then
+    realOutLen := outLen; // Sécurité sur la taille allouée
+
+    if EVP_PKEY_decrypt(dctx, outBuf, @realOutLen, binBuf, binLen) <> 1 then
     begin
       err := ERR_get_error;
       repeat
@@ -1864,10 +1856,13 @@ begin
     // =========================================================
     // 4. Récupération du texte clair
     // =========================================================
-    SetLength(plainText, outLen);
-    Move(outBuf^, plainText[1], outLen);
+    SetLength(plainText, realOutLen);
+    if realOutLen > 0 then
+      Move(outBuf^, plainText[1], realOutLen);
+
     log('Decrypted: ' + string(plainText));
 
+    s:=plainText;
     result := true;
 
   finally
@@ -1875,7 +1870,6 @@ begin
     if FKey     <> nil then EVP_PKEY_free(FKey);
     if binBuf   <> nil then FreeMem(binBuf);
     if outBuf   <> nil then FreeMem(outBuf);
-    // gardes si Exit avant BIO_push
     if b64      <> nil then BIO_free(b64);
     if bio_mem  <> nil then BIO_free(bio_mem);
     if bioChain <> nil then BIO_free_all(bioChain);

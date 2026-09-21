@@ -111,11 +111,11 @@ begin
   writeln('');
   writeln('CERTIFICATE COMMANDS');
   writeln('  --mkcert      Generate a self-signed certificate');
-  writeln('                  --out=ca.crt  --cn="My CA"  --algo=RSA|EC|EC384|EC521|ED25519  --ca');
+  writeln('                  --out=ca.crt  --cn="My CA"  --algo=RSA|EC|EC384|EC521|ED25519  --ca=true');
   writeln('  --mkreq       Generate a Certificate Signing Request (CSR)');
   writeln('                  --out=req.csr  --cn="www.example.com"  [--key=existing.key]');
   writeln('  --signreq     Sign a CSR with a CA certificate');
-  writeln('                  --csr=req.csr  --ca=ca.crt  [--alt="DNS:*.example.com"]  [--password=pwd]');
+  writeln('                  --csr=req.csr  -cert=ca.crt [--ca=true]  [--alt="DNS:*.example.com"]  [--password=pwd]');
   writeln('  --verify      Verify a certificate against a CA');
   writeln('                  --cert=server.crt  --ca=ca.crt');
   writeln('  --set_password  Change or remove private key password');
@@ -124,7 +124,7 @@ begin
   writeln('INSPECT COMMANDS');
   writeln('  --print_cert     Print certificate details  --cert=file.crt');
   writeln('  --print_private  Print private key details  --key=file.key  [--password=pwd]');
-  writeln('  --print_request  Print CSR details          --cert=file.csr');
+  writeln('  --print_request  Print CSR details          --csr=file.csr');
   writeln('  --print_sshkey   Print public key in OpenSSH format  --key=file.pem');
   writeln('');
   writeln('FORMAT CONVERSION');
@@ -416,8 +416,10 @@ begin
     hfile_ := CreateFile(pchar(in_), GENERIC_READ , FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING , FILE_ATTRIBUTE_NORMAL, 0);
     if hfile_=thandle(-1) then begin log('invalid handle',1);exit;end;
     ReadFile (hfile_,mem_[0],sizeof(mem_),size_,nil);
-    if size_>0 then Decrypt_Priv(strpas(@mem_[0]));
+    if size_>0 then Decrypt_Priv(strpas(@mem_[0]),s);
+    writeln(s);
     closehandle(hfile_);
+    writeln('ok');
     freessl;
     exit;
   end;
@@ -669,10 +671,10 @@ begin
     begin
     try
     LoadSSL;
-    cert := cmd.readString('cert');
-    if cert = '' then begin writeln('--cert requis'); exit; end;
-    if not FileExists(cert) then begin writeln('Fichier introuvable: ' + cert); exit; end;
-    if print_req(cert)=true then writeln('ok') else writeln('not ok');
+    csr := cmd.readString('csr');
+    if csr = '' then begin writeln('--csr requis'); exit; end;
+    if not FileExists(csr) then begin writeln('Fichier introuvable: ' + cert); exit; end;
+    if print_req(csr)=true then writeln('ok') else writeln('not ok');
     finally
     FreeSSL;
     end;

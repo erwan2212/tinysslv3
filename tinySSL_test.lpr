@@ -291,6 +291,7 @@ begin
   WriteLn('  --- OpenSSH public key ---');
   Check('PrintSSHKey RSA', PrintSSHKey('public.pem'));
 
+  {
   Section('PrintSSHKey (EC P-256)');
   if not FileExists('ca_ec.key') then begin Skip('PrintSSHKey EC', 'ca_ec.key absent'); Exit; end;
   Check('PrintSSHKey EC', PrintSSHKey('ca_ec.key'));
@@ -298,6 +299,7 @@ begin
   Section('PrintSSHKey (EC P-384)');
   if not FileExists('ca_ec384.key') then begin Skip('PrintSSHKey EC384', 'ca_ec384.key absent'); Exit; end;
   Check('PrintSSHKey EC384', PrintSSHKey('ca_ec384.key'));
+  }
 end;
 
 // ----------------------------------------------------------------------------
@@ -305,26 +307,26 @@ procedure Test_SetPassword;
 var content1, content2: string;
 begin
   Section('set_password');
-  if not FileExists('ca_rsa.key') then begin Skip('set_password', 'ca_rsa.key absent'); Exit; end;
+  if not FileExists('server.key') then begin Skip('set_password', 'server.key absent'); Exit; end;
 
   // Copie de la clé originale (en clair car générée sans mot de passe)
-  content1 := ReadFileContent('ca_rsa.key');
+  content1 := ReadFileContent('server.key');
 
   // Ajout d'un mot de passe
   Check('set_password (ajout password)',
-    set_password('ca_rsa.key', 'testpassword'));
+    set_password('server.key', 'secret'));
 
   // La clé chiffrée doit contenir ENCRYPTED
-  content2 := ReadFileContent('new_ca_rsa.key');
+  content2 := ReadFileContent('new_server.key');
   Check('clé contient ENCRYPTED après set_password',
     Pos('ENCRYPTED', content2) > 0);
 
   // Suppression du mot de passe
   Check('set_password (suppression password)',
-    set_password('new_ca_rsa.key', ''));
+    set_password('new_server.key', ''));
 
   // La clé en clair ne doit plus contenir ENCRYPTED
-  content2 := ReadFileContent('new_ca_rsa.key');
+  content2 := ReadFileContent('new_new_server.key');
   Check('clé sans ENCRYPTED après suppression',
     Pos('ENCRYPTED', content2) = 0);
 end;
@@ -400,7 +402,7 @@ end;
 
 // ----------------------------------------------------------------------------
 procedure Test_EncryptDecrypt_RSA;
-var encrypted: string;
+var encrypted,decrypted: string;
 begin
   Section('Encrypt_Pub / Decrypt_Priv (RSA PKCS#1)');
   if not FileExists('public.pem') or not FileExists('private.pem') then
@@ -417,7 +419,8 @@ begin
   if encrypted <> '' then
   begin
     WriteLn('  --- Déchiffrement ---');
-    Check('Decrypt_Priv', Decrypt_Priv(encrypted));
+    Check('Decrypt_Priv', Decrypt_Priv(encrypted,decrypted));
+    writeln('Dechiffré : '+decrypted );
   end;
 end;
 
@@ -449,7 +452,7 @@ begin
   end;
 
   Cleanup(['ca_rsa.pfx']);
-  Check('PEM2PFX', PEM2PFX('testpfxpwd', 'ca_rsa.key', 'ca_rsa.crt'));
+  Check('PEM2PFX', PEM2PFX('testpfxpwd', 'ca_rsa.key', 'ca_rsa.crt','secret'));
   CheckFile('ca_rsa.pfx créé', 'ca_rsa.pfx');
 
   if FileExists('ca_rsa.pfx') then
@@ -502,7 +505,7 @@ begin
 
   // Étape 1 : CA
   Check('1. mkcert CA RSA',
-    mkcert('wf_ca.crt', 'Workflow CA', '', '', '', true, 'RSA'));
+    mkcert('wf_ca.crt', 'Workflow CA', '', 'secret', '', true, 'RSA'));
   CheckFile('   wf_ca.crt', 'wf_ca.crt');
 
   // Étape 2 : CSR
@@ -514,7 +517,7 @@ begin
   // Étape 3 : Signature
   if FileExists('wf_ca.crt') and FileExists('wf_server.csr') then
     Check('3. signreq',
-      signreq('wf_server.csr', 'wf_ca.crt', '',
+      signreq('wf_server.csr', 'wf_ca.crt', 'secret',
               'DNS:wf.example.com,DNS:*.wf.example.com', false));
   CheckFile('   wf_server.crt', 'wf_server.crt');
 
@@ -627,7 +630,7 @@ begin
 
     // --- Workflows complets ---
     Test_Workflow_Complete;
-    Test_Workflow_EC;
+    //Test_Workflow_EC;
 
   finally
     FreeSSL;

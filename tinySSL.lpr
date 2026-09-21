@@ -416,7 +416,8 @@ begin
     hfile_ := CreateFile(pchar(in_), GENERIC_READ , FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING , FILE_ATTRIBUTE_NORMAL, 0);
     if hfile_=thandle(-1) then begin log('invalid handle',1);exit;end;
     ReadFile (hfile_,mem_[0],sizeof(mem_),size_,nil);
-    if size_>0 then Decrypt_Priv(strpas(@mem_[0]));
+    if size_>0 then Decrypt_Priv(strpas(@mem_[0]),s);
+    writeln(s);
     closehandle(hfile_);
     freessl;
     exit;
