@@ -282,11 +282,18 @@ begin
   end;
 
   try
-    // 4. Création de la structure PKCS#7 "certs only"
-    p7 := PKCS7_sign(nil, nil, certs, nil, PKCS7_BINARY);
+    // 4. Création de la structure PKCS#7 "certs only" avec PKCS7_PARTIAL
+    p7 := PKCS7_sign(nil, nil, certs, nil, PKCS7_PARTIAL or PKCS7_BINARY);
     if p7 = nil then
     begin
-      log('Erreur : échec de PKCS7_sign.');
+      log('Erreur : échec de PKCS7_sign (structure partielle).');
+      Exit;
+    end;
+
+    // Finalisation indispensable de la structure PKCS#7 "certs-only"
+    if PKCS7_final(p7, nil, PKCS7_BINARY) <= 0 then
+    begin
+      log('Erreur : échec de PKCS7_final.');
       Exit;
     end;
 
@@ -297,9 +304,17 @@ begin
     begin
       try
         Result := PEM_write_bio_PKCS7(bpOut, p7) > 0;
+        if Result then
+          log('Succès : fichier .p7b généré -> ' + OutFileName)
+        else
+          log('Erreur : échec de l''écriture du PEM PKCS7.');
       finally
         BIO_free(bpOut);
       end;
+    end
+    else
+    begin
+      log('Erreur : impossible de créer le fichier de sortie .p7b.');
     end;
 
   finally
@@ -987,6 +1002,8 @@ begin
   log('signreq');
   log('filename:' + filename);
   log('cert:'     + cert);
+  log('alt:'     + alt);
+  log('ca:'     + booltostr(ca));
   result := false;
 
   try
@@ -1362,7 +1379,14 @@ These certificates are mainly used on the Windows platform.
       { =========================================================
         8. Signature du certificat avec SHA-256
         ======================================================== }
+      if AnsiUpperCase(sAlgo) = 'ED25519' then
+      begin
+      if X509_sign(x509, pkey, nil) = 0 then Exit;  // ED25519 = digest implicite
+      end
+      else
+      begin
       if X509_sign(x509, pkey, EVP_sha256()) = 0 then Exit;
+      end;
 
       { =========================================================
         9. Écriture de la clé privée sur disque (uniquement si générée)
@@ -1823,8 +1847,9 @@ begin
     if EVP_PKEY_decrypt(dctx, nil, @outLen, binBuf, binLen) <> 1 then Exit;
 
     log('EVP_PKEY_decrypt outlen: ' + IntToStr(outLen));
-
-    // Passe 2 : déchiffrement effectif
+    if outLen = 0 then Exit;   // ← AJOUT : sortie sécurisée si outLen invalide
+   
+	// Passe 2 : déchiffrement effectif
     GetMem(outBuf, outLen);
     if EVP_PKEY_decrypt(dctx, outBuf, @outLen, binBuf, binLen) <> 1 then
     begin

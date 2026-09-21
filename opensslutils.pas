@@ -282,11 +282,11 @@ begin
   end;
 
   try
-    // 4. Création de la structure PKCS#7 "certs only"
-    p7 := PKCS7_sign(nil, nil, certs, nil, PKCS7_BINARY);
+    // 4. Création directe de la structure PKCS#7 "certs-only" (sans PKCS7_final)
+    p7 := PKCS7_sign(nil, nil, certs, nil, PKCS7_PARTIAL or PKCS7_BINARY);
     if p7 = nil then
     begin
-      log('Erreur : échec de PKCS7_sign.');
+      log('Erreur : échec de PKCS7_sign (structure partielle).');
       Exit;
     end;
 
@@ -297,9 +297,17 @@ begin
     begin
       try
         Result := PEM_write_bio_PKCS7(bpOut, p7) > 0;
+        if Result then
+          log('Succès : fichier .p7b généré -> ' + OutFileName)
+        else
+          log('Erreur : échec de l''écriture du PEM PKCS7.');
       finally
         BIO_free(bpOut);
       end;
+    end
+    else
+    begin
+      log('Erreur : impossible de créer le fichier de sortie .p7b.');
     end;
 
   finally
