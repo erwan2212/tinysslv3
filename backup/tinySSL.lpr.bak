@@ -14,7 +14,7 @@ uses
   windows,sysutils,classes,
   rcmdline in '..\rcmdline-master\rcmdline.pas',
   opensslutils,
-  utils ;
+  utils,userverhttps,crt, uwinstore ;
 
 //https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-publickeystruc
 type
@@ -56,9 +56,7 @@ var
   dw:dword;
   ws:widestring;
   utf16:boolean=false;
-
-
-
+  //
 
 
 //load a decrypted rsa key, no header
@@ -245,6 +243,10 @@ begin
   cmd.declareflag('pemtop12', 'convert a pem to pfx, read from cert and key, write to cert.pfx');
   cmd.declareflag('p7topem', 'convert a p7b to pem, read from cert, write to cert.crt');
   cmd.declareflag('pemtop7', 'convert a pem to p7b, read from cert, write to cert.p7b');
+
+  cmd.declareflag('server', 'runs a https server using server.crt and server.key');
+
+  cmd.declareflag('list_store', 'list certs in a store defined with ca');
   //
   cmd.parse(cmdline);
 
@@ -419,7 +421,6 @@ begin
     if size_>0 then Decrypt_Priv(strpas(@mem_[0]),s);
     writeln(s);
     closehandle(hfile_);
-    writeln('ok');
     freessl;
     exit;
   end;
@@ -711,6 +712,40 @@ begin
     try
     LoadSSL;
     writeln(GenerateSecureRandomHex());
+    finally
+    FreeSSL;
+    end;
+    exit;
+    end;
+
+    if cmd.existsProperty('server')=true then
+    begin
+    try
+    LoadSSL;
+    //
+    // Pour démarrer le serveur sur le port par défaut (8443) ou un autre :
+    StartHttpsServer(8443);
+
+    // Pour l'arrêter manuellement ou écouter la touche ESC :
+    // (Par exemple dans une boucle de votre choix)
+    repeat
+      if KeyPressed then
+        if ReadKey = #27 then StopHttpsServer;
+      Sleep(50);
+    until not IsHttpsServerRunning;
+    //
+    finally
+    FreeSSL;
+    end;
+    exit;
+    end;
+
+    if cmd.existsProperty('list_store')=true then
+    begin
+    try
+    LoadSSL;
+    ca:=cmd.readString('ca');
+    list_windows_store (ca);
     finally
     FreeSSL;
     end;

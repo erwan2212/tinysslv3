@@ -77,6 +77,7 @@ function Base64Decode(message:string;utf16:boolean=false):boolean;
 function getDN(pDn: pX509_NAME): String;
 function getTime(asn1_time: pASN1_TIME): TDateTime;
 function getSerialNumber(x509:px509): String;
+procedure PrintFingerprint(cert: PX509);
 
 function PrintSSHKey(filename:string):boolean;
 
@@ -133,10 +134,13 @@ const
 
 procedure FreeSSL;
 begin
-  {
-  EVP_cleanup;
-  ERR_free_strings;
-  }
+  // Sous OpenSSL 3.x, EVP_cleanup et ERR_free_strings n'existent plus.
+  // La fonction globale de nettoyage moderne est OPENSSL_cleanup.
+
+  // Note : Dans de nombreux cas avec OpenSSL 3, le nettoyage par le système
+  // à la fermeture du processus suffit, mais si vous souhaitez un nettoyage explicite :
+
+  OPENSSL_cleanup;
 end;
 
 procedure bio_flush(bp:pbio);
@@ -1862,7 +1866,7 @@ begin
 
     log('Decrypted: ' + string(plainText));
 
-    s:=plainText;
+    decrypted:=string(plainText);
     result := true;
 
   finally
@@ -2205,6 +2209,21 @@ var
 begin
 X509_NAME_oneline(pDn, @buffer, SizeOf(buffer));
 result := StrPas(@buffer);
+end;
+
+function getDN2(pDn: pX509_NAME): String;
+// Remplacement dans getdn ou dans list_windows_store :
+var bio: pBIO;
+    len: integer;
+    buf: AnsiString;
+begin
+  bio := BIO_new(BIO_s_mem());
+  X509_NAME_print_ex(bio, pDn, 0, XN_FLAG_RFC2253 or ASN1_STRFLGS_UTF8_CONVERT);
+  len := BIO_pending(bio);
+  SetLength(buf, len);
+  BIO_read(bio, @buf[1], len);
+  BIO_free(bio);
+  result := string(buf);
 end;
 
 // Extract a ASN1 time

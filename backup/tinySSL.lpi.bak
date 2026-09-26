@@ -55,7 +55,7 @@
         <CommandLineParams Value="--print_sshkey --filename=public.pem"/>
       </local>
     </RunParams>
-    <Units Count="4">
+    <Units Count="5">
       <Unit0>
         <Filename Value="tinySSL.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -72,6 +72,10 @@
         <Filename Value="utils.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit3>
+      <Unit4>
+        <Filename Value="uwinstore.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit4>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

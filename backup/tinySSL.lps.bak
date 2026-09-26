@@ -4,132 +4,180 @@
     <PathDelim Value="\"/>
     <Version Value="10"/>
     <BuildModes Active="Default"/>
-    <Units Count="4">
+    <Units Count="7">
       <Unit0>
         <Filename Value="tinySSL.lpr"/>
         <IsPartOfProject Value="True"/>
-        <TopLine Value="402"/>
-        <CursorPos X="54" Y="418"/>
-        <UsageCount Value="38"/>
+        <TopLine Value="724"/>
+        <CursorPos X="48" Y="744"/>
+        <UsageCount Value="40"/>
         <Loaded Value="True"/>
       </Unit0>
       <Unit1>
         <Filename Value="..\rcmdline-master\rcmdline.pas"/>
         <IsPartOfProject Value="True"/>
-        <UsageCount Value="38"/>
+        <UsageCount Value="40"/>
       </Unit1>
       <Unit2>
         <Filename Value="opensslutils.pas"/>
         <IsPartOfProject Value="True"/>
-        <IsVisibleTab Value="True"/>
-        <EditorIndex Value="1"/>
-        <TopLine Value="1853"/>
-        <CursorPos X="18" Y="1865"/>
-        <UsageCount Value="38"/>
+        <EditorIndex Value="4"/>
+        <TopLine Value="63"/>
+        <CursorPos X="28" Y="74"/>
+        <UsageCount Value="40"/>
         <Loaded Value="True"/>
       </Unit2>
       <Unit3>
         <Filename Value="utils.pas"/>
         <IsPartOfProject Value="True"/>
-        <UsageCount Value="38"/>
+        <EditorIndex Value="2"/>
+        <UsageCount Value="40"/>
+        <Loaded Value="True"/>
       </Unit3>
+      <Unit4>
+        <Filename Value="userverhttps.pas"/>
+        <EditorIndex Value="3"/>
+        <UsageCount Value="11"/>
+        <Loaded Value="True"/>
+      </Unit4>
+      <Unit5>
+        <Filename Value="C:\FPC\3.0.0\source\packages\rtl-extra\src\inc\socketsh.inc"/>
+        <EditorIndex Value="-1"/>
+        <TopLine Value="38"/>
+        <CursorPos X="3" Y="55"/>
+        <UsageCount Value="10"/>
+      </Unit5>
+      <Unit6>
+        <Filename Value="uwinstore.pas"/>
+        <IsPartOfProject Value="True"/>
+        <IsVisibleTab Value="True"/>
+        <EditorIndex Value="1"/>
+        <TopLine Value="140"/>
+        <CursorPos X="39" Y="157"/>
+        <UsageCount Value="22"/>
+        <Loaded Value="True"/>
+      </Unit6>
     </Units>
-    <JumpHistory Count="24" HistoryIndex="23">
+    <JumpHistory Count="30" HistoryIndex="29">
       <Position1>
         <Filename Value="opensslutils.pas"/>
+        <Caret Line="17" Column="23"/>
       </Position1>
       <Position2>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="328" Column="5"/>
+        <Filename Value="userverhttps.pas"/>
       </Position2>
       <Position3>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="67" Column="49" TopLine="39"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="24" Column="16"/>
       </Position3>
       <Position4>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="1162" Column="70" TopLine="1134"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="91" Column="15" TopLine="72"/>
       </Position4>
       <Position5>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="1163" Column="60" TopLine="1135"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="25" Column="16"/>
       </Position5>
       <Position6>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="434" Column="21" TopLine="423"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="24" Column="12"/>
       </Position6>
       <Position7>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="47" Column="35" TopLine="30"/>
+        <Filename Value="opensslutils.pas"/>
+        <Caret Line="8" Column="29" TopLine="4"/>
       </Position7>
       <Position8>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="139" Column="45" TopLine="112"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="25" Column="16"/>
       </Position8>
       <Position9>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="141" Column="41" TopLine="113"/>
+        <Filename Value="opensslutils.pas"/>
+        <Caret Line="2195" Column="49" TopLine="2188"/>
       </Position9>
       <Position10>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="159" Column="78" TopLine="131"/>
+        <Filename Value="opensslutils.pas"/>
+        <Caret Line="80" Column="42" TopLine="52"/>
       </Position10>
       <Position11>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="168" Column="51" TopLine="140"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="24" Column="21"/>
       </Position11>
       <Position12>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="196" Column="71" TopLine="168"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="28" Column="20"/>
       </Position12>
       <Position13>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="200" Column="61" TopLine="172"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="25" Column="22"/>
       </Position13>
       <Position14>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="226" Column="27" TopLine="198"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="27" Column="15"/>
       </Position14>
       <Position15>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="232" Column="42" TopLine="204"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="28" Column="3"/>
       </Position15>
       <Position16>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="311" TopLine="286"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="8" Column="83"/>
       </Position16>
       <Position17>
-        <Filename Value="tinySSL.lpr"/>
-        <Caret Line="421" Column="18" TopLine="391"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="232" Column="87" TopLine="203"/>
       </Position17>
       <Position18>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="7" Column="72"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="297" Column="30" TopLine="287"/>
       </Position18>
       <Position19>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="68" Column="22" TopLine="40"/>
+        <Filename Value="tinySSL.lpr"/>
+        <Caret Line="748" Column="28" TopLine="722"/>
       </Position19>
       <Position20>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="1754" TopLine="1732"/>
+        <Filename Value="tinySSL.lpr"/>
+        <Caret Line="249" Column="74" TopLine="234"/>
       </Position20>
       <Position21>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="68" Column="22" TopLine="51"/>
+        <Filename Value="tinySSL.lpr"/>
+        <Caret Line="48" Column="9" TopLine="32"/>
       </Position21>
       <Position22>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="1865" Column="11" TopLine="1841"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="83" Column="61" TopLine="49"/>
       </Position22>
       <Position23>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="35" Column="14" TopLine="18"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="241" Column="5" TopLine="207"/>
       </Position23>
       <Position24>
-        <Filename Value="opensslutils.pas"/>
-        <Caret Line="68" Column="22" TopLine="40"/>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="87" Column="95" TopLine="71"/>
       </Position24>
+      <Position25>
+        <Filename Value="opensslutils.pas"/>
+        <Caret Line="80" Column="42" TopLine="52"/>
+      </Position25>
+      <Position26>
+        <Filename Value="opensslutils.pas"/>
+        <Caret Line="2214" Column="44" TopLine="2194"/>
+      </Position26>
+      <Position27>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="158" Column="40" TopLine="140"/>
+      </Position27>
+      <Position28>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="151" Column="39" TopLine="140"/>
+      </Position28>
+      <Position29>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="157" Column="39" TopLine="140"/>
+      </Position29>
+      <Position30>
+        <Filename Value="uwinstore.pas"/>
+        <Caret Line="158" Column="39" TopLine="140"/>
+      </Position30>
     </JumpHistory>
   </ProjectSession>
 </CONFIG>
